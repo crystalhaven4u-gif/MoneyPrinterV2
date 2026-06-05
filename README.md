@@ -92,7 +92,6 @@ MoneyPrinterV2 is licensed under `Affero General Public License v3.0`. See [LICE
 ## Acknowledgments
 
 - [KittenTTS](https://github.com/KittenML/KittenTTS)
-- [gpt4free](https://github.com/xtekky/gpt4free)
 
 ## Disclaimer
 
