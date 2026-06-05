@@ -54,14 +54,48 @@ def main() -> int:
             "MoviePy subtitle rendering may fail."
         )
 
+    use_selenium_upload = bool(cfg.get("use_selenium_upload", False))
+
     firefox_profile = cfg.get("firefox_profile", "")
     if firefox_profile:
         if os.path.isdir(firefox_profile):
             ok(f"firefox_profile exists: {firefox_profile}")
         else:
             warn(f"firefox_profile does not exist: {firefox_profile}")
+    elif use_selenium_upload:
+        warn(
+            "firefox_profile is empty but use_selenium_upload is true. "
+            "The Selenium upload path requires a logged-in Firefox profile."
+        )
     else:
-        warn("firefox_profile is empty. Twitter/YouTube automation requires this.")
+        ok(
+            "firefox_profile not required (use_selenium_upload is false; "
+            "YouTube uploads use the Data API). Twitter automation still needs it."
+        )
+
+    # YouTube Data API readiness (default upload path).
+    if not use_selenium_upload:
+        youtube_cfg = cfg.get("youtube", {}) if isinstance(cfg.get("youtube"), dict) else {}
+        client_secrets = youtube_cfg.get("client_secrets_file", "client_secret.json")
+        if not os.path.isabs(client_secrets):
+            client_secrets = os.path.join(ROOT_DIR, client_secrets)
+        token_file = youtube_cfg.get("token_file", os.path.join(".mp", "youtube_token.json"))
+        if not os.path.isabs(token_file):
+            token_file = os.path.join(ROOT_DIR, token_file)
+
+        if os.path.exists(token_file):
+            ok("YouTube OAuth token is cached; uploads are authorized.")
+        elif os.path.exists(client_secrets):
+            ok(
+                f"YouTube OAuth client secrets present: {client_secrets} "
+                "(first upload will open a browser to authorize)."
+            )
+        else:
+            warn(
+                "No YouTube OAuth client secrets found. Publishing to YouTube "
+                "via the Data API will fail until youtube.client_secrets_file "
+                "points at a Desktop-app OAuth client JSON."
+            )
 
     # Ollama (LLM)
     base = str(cfg.get("ollama_base_url", "http://127.0.0.1:11434")).rstrip("/")
