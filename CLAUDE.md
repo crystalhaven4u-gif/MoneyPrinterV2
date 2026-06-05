@@ -81,3 +81,48 @@ All config lives in `config.json` at the project root. See `config.example.json`
 ## Contributing
 
 PRs go against `main`. One feature/fix per PR. Open an issue first. Use `WIP` label for in-progress PRs.
+
+## Fork-specific rules (OffSzn content engine)
+
+- NEVER publish directly from a pipeline run. All output goes to
+  ./review_queue/pending/; only ./review_queue/approved/ may be published.
+- Selenium upload paths are deprecated. Do not extend them. All publishing
+  goes through the YouTube Data API, Post Bridge, or the X API.
+- Every generated asset MUST get a ledger row in .mp/ledger.db and a
+  utm_campaign of the form mpv2-{lane}-{video_id}. No untracked output.
+- Prompts live in prompts/*.yaml with versions — never hardcode prompt
+  strings in Python.
+- Lanes: "offszn" (product content, always CTA + UTM link) and "faceless".
+- Store facts (use these, don't invent): OffSzn buds, $24.99 single,
+  $49.99 x2, $59.99 x3, chrome design, USB-C, store offszn.us.
+- Keep Ollama for text generation. Never add gpt4free or similar
+  reverse-engineered API dependencies.
+
+### Phase 1 architecture (review gate, ledger, API publishing)
+
+The generation → distribution flow is now:
+
+1. **Generate** — `main.py` (option 1) or `cron.py` call
+   `YouTube.generate_video()`, which creates a ledger row up front and updates
+   it as each stage completes. The finished MP4 is submitted to the review
+   queue (pending) via `review_queue.submit()`; nothing uploads here.
+2. **Review** — `python src/review.py` lists pending items and lets a human
+   approve/reject. Approved items move to `review_queue/approved/`.
+3. **Publish** — `python src/publish.py` drains `review_queue/approved/`,
+   uploading to YouTube (Data API) and/or TikTok+Instagram (Post Bridge),
+   then moves items to `review_queue/published/` and marks the ledger row
+   `published` with the platform and post id.
+
+Key modules added in Phase 1:
+- `src/ledger.py` — SQLite run ledger (`.mp/ledger.db`).
+- `src/review_queue.py` — filesystem review-queue gate + ledger integration.
+- `src/review.py` — review CLI.
+- `src/youtube_upload.py` — YouTube Data API v3 uploader (OAuth installed-app
+  flow, token cached at `.mp/youtube_token.json`). Set `use_selenium_upload:
+  true` to fall back to the deprecated Selenium path.
+- `src/publish.py` — publisher that drains the approved queue.
+
+To use the YouTube Data API path, download an OAuth client secrets file
+(Desktop app) from the Google Cloud console and point
+`youtube.client_secrets_file` at it (default `client_secret.json` in the repo
+root, which is gitignored).
