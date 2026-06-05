@@ -1,4 +1,16 @@
+import sys
+
 from termcolor import colored
+
+# Status messages use emoji. On Windows the default console encoding (cp1252)
+# raises UnicodeEncodeError on those characters, which would crash the app.
+# Reconfigure the standard streams to UTF-8 (replacing anything unmappable) so
+# logging never takes down a pipeline run.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 
 def error(message: str, show_emoji: bool = True) -> None:
     """

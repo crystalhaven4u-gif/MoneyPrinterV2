@@ -340,6 +340,118 @@ def get_script_sentence_length() -> int:
         else:
             return 4
 
+def get_use_selenium_upload() -> bool:
+    """
+    Gets the flag controlling whether YouTube uploads use the deprecated
+    Selenium path instead of the YouTube Data API.
+
+    Returns:
+        use_selenium (bool): True to use Selenium, False (default) for the API.
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        return bool(json.load(file).get("use_selenium_upload", False))
+
+def get_default_lane() -> str:
+    """
+    Gets the default content lane used when none is supplied at runtime.
+
+    Returns:
+        lane (str): The default lane name.
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        return str(json.load(file).get("default_lane", "faceless")) or "faceless"
+
+def _get_youtube_config() -> dict:
+    """
+    Reads the "youtube" config block with safe defaults.
+
+    Returns:
+        config (dict): YouTube Data API configuration.
+    """
+    defaults = {
+        "client_secrets_file": "client_secret.json",
+        "token_file": os.path.join(".mp", "youtube_token.json"),
+        "category_id": "22",
+        "privacy_status": "private",
+        "contains_synthetic_media": True,
+        "default_tags": [],
+    }
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        raw = json.load(file).get("youtube", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    merged = dict(defaults)
+    merged.update({k: v for k, v in raw.items() if v is not None})
+    return merged
+
+def _resolve_under_root(path: str) -> str:
+    """
+    Resolves a possibly-relative path against ROOT_DIR.
+    """
+    if os.path.isabs(path):
+        return path
+    return os.path.join(ROOT_DIR, path)
+
+def get_youtube_client_secrets_file() -> str:
+    """
+    Gets the absolute path to the Google OAuth client secrets JSON file.
+
+    Returns:
+        path (str): Absolute client secrets path.
+    """
+    return _resolve_under_root(_get_youtube_config()["client_secrets_file"])
+
+def get_youtube_token_file() -> str:
+    """
+    Gets the absolute path to the cached YouTube OAuth token file.
+
+    Returns:
+        path (str): Absolute token cache path.
+    """
+    return _resolve_under_root(_get_youtube_config()["token_file"])
+
+def get_youtube_category_id() -> str:
+    """
+    Gets the numeric YouTube category id used for uploads.
+
+    Returns:
+        category_id (str): YouTube category id.
+    """
+    return str(_get_youtube_config()["category_id"])
+
+def get_youtube_privacy_status() -> str:
+    """
+    Gets the privacy status applied to API uploads.
+
+    Returns:
+        privacy_status (str): One of "private", "unlisted", "public".
+    """
+    status = str(_get_youtube_config()["privacy_status"]).lower()
+    return status if status in {"private", "unlisted", "public"} else "private"
+
+def get_youtube_contains_synthetic_media() -> bool:
+    """
+    Gets the AI-generated content disclosure flag (altered/synthetic media)
+    applied to API uploads. Defaults to True because this engine produces
+    AI-generated content.
+
+    Returns:
+        contains_synthetic_media (bool): Disclosure flag.
+    """
+    return bool(_get_youtube_config()["contains_synthetic_media"])
+
+def get_youtube_default_tags() -> list:
+    """
+    Gets the default list of tags applied to API uploads.
+
+    Returns:
+        tags (list): Default tags.
+    """
+    tags = _get_youtube_config()["default_tags"]
+    if not isinstance(tags, list):
+        return []
+    return [str(tag) for tag in tags]
+
 def get_post_bridge_config() -> dict:
     """
     Gets the Post Bridge configuration with safe defaults.
