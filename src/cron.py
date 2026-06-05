@@ -8,7 +8,7 @@ from classes.Tts import TTS
 from classes.Twitter import Twitter
 from classes.YouTube import YouTube
 from llm_provider import select_model
-from post_bridge_integration import maybe_crosspost_youtube_short
+import review_queue
 
 def main():
     """Main function to post content to Twitter or upload videos to YouTube.
@@ -80,17 +80,20 @@ def main():
                     acc["language"]
                 )
                 youtube.generate_video(tts)
-                upload_success = youtube.upload_video()
-                if upload_success:
-                    if verbose:
-                        success("Uploaded Short.")
-                    maybe_crosspost_youtube_short(
-                        video_path=youtube.video_path,
-                        title=youtube.metadata.get("title", ""),
-                        interactive=False,
+                # Distribution safety: cron never publishes directly. The video
+                # lands in the review queue (pending) for human approval; the
+                # publisher (src/publish.py) drains the approved queue.
+                target_platforms = review_queue.default_target_platforms()
+                metadata = youtube.build_review_metadata(target_platforms)
+                item = review_queue.submit(
+                    video_path=youtube.video_path,
+                    metadata=metadata,
+                    video_id=youtube.video_id,
+                )
+                if verbose:
+                    success(
+                        f"Submitted to review queue (pending): {item['video_id']}"
                     )
-                else:
-                    warning("YouTube upload failed. Skipping Post Bridge cross-post.")
                 break
     else:
         error("Invalid Purpose, exiting...")
