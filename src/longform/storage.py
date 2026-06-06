@@ -135,3 +135,85 @@ def get_by_niche(niche: str, db_path: Optional[str] = None) -> list:
         return [dict(row) for row in rows]
     finally:
         connection.close()
+
+
+# --------------------------------------------------------------------------- #
+# Image generation ledger
+# --------------------------------------------------------------------------- #
+# One row per generated image. Records which provider served it and the cost
+# (0 for the free backends), so spend stays auditable as backends are swapped.
+IMAGE_LOG_COLUMNS = (
+    "created_at",
+    "provider",
+    "prompt",
+    "aspect_ratio",
+    "width",
+    "height",
+    "output_path",
+    "cost",
+    "is_placeholder",
+    "quality",
+    "note",
+)
+
+
+def init_image_log(db_path: Optional[str] = None) -> None:
+    """Creates the ``image_log`` table if it does not exist."""
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS image_log (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at      TEXT,
+                provider        TEXT,
+                prompt          TEXT,
+                aspect_ratio    TEXT,
+                width           INTEGER,
+                height          INTEGER,
+                output_path     TEXT,
+                cost            REAL,
+                is_placeholder  INTEGER,
+                quality         TEXT,
+                note            TEXT
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def log_image(record: dict, db_path: Optional[str] = None) -> None:
+    """
+    Appends one image-generation event to the ledger.
+
+    Args:
+        record (dict): May contain any of ``IMAGE_LOG_COLUMNS``; missing keys
+            are stored as NULL.
+        db_path (str | None): Optional override for the database path.
+    """
+    init_image_log(db_path)
+    placeholders = ", ".join("?" for _ in IMAGE_LOG_COLUMNS)
+    values = [record.get(column) for column in IMAGE_LOG_COLUMNS]
+    sql = (
+        f"INSERT INTO image_log ({', '.join(IMAGE_LOG_COLUMNS)}) "
+        f"VALUES ({placeholders})"
+    )
+    connection = _connect(db_path)
+    try:
+        connection.execute(sql, values)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def get_image_log(db_path: Optional[str] = None) -> list:
+    """Returns all image-generation events oldest-first."""
+    init_image_log(db_path)
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute("SELECT * FROM image_log ORDER BY id").fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
