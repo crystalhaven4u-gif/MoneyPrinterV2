@@ -162,7 +162,10 @@ generator takes an injectable `llm(prompt)->str` so tests never hit a server.
 - `src/longform/packaging.py` — 5 titles (iceberg + specific_number +
   curiosity_gap) and 3 tiered thumbnail concepts; thumbnails are rendered by
   calling `image_providers.generate_image()` (free Pollinations path) at
-  1280x720 then overlaying big PIL text. Writes ONE review item to
+  1280x720 then overlaying big title text with ImageMagick (the local Pillow
+  build segfaults on repeated freetype text rendering; ImageMagick rasterizes in
+  its own process and is the project's existing text renderer). Writes ONE
+  review item to
   `review_queue/pending/<run_id>/` (gitignored) and logs the chosen title/hook.
 - Creative ledger tables live in `.mp/farm.db`: `creative_runs`, `hook_variants`,
   `title_variants`.

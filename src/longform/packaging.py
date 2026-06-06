@@ -126,78 +126,114 @@ def build_thumbnail_concepts(topic: str) -> list:
 # --------------------------------------------------------------------------- #
 # Rendering (generate_image + PIL text overlay)
 # --------------------------------------------------------------------------- #
-def _font_path() -> Optional[str]:
-    candidate = os.path.join(_ROOT_DIR, "fonts", "bold_font.ttf")
-    return candidate if os.path.exists(candidate) else None
+# Heavy, readable fonts for thumbnail text, best-first. The bundled
+# fonts/bold_font.ttf is a LAST resort: it has broken metrics (zero-height
+# bbox) that segfault freetype on multi-word strings in Pillow 9.x, so prefer a
+# real system font wherever one exists.
+# Thumbnail text is rendered with ImageMagick (a project dependency, configured
+# at imagemagick_path) rather than Pillow/freetype: the local Pillow build
+# segfaults nondeterministically on repeated freetype text rendering. ImageMagick
+# rasterizes text in its own process, so it is both robust and higher quality.
+# If ImageMagick is unavailable we fall back to a text-less cover-fit so a render
+# never crashes.
+_MIN_POINTSIZE = 44
+_MAX_POINTSIZE = 120
+_CHAR_WIDTH_RATIO = 0.55      # avg glyph width / pointsize, for size heuristic
+_LINE_RATIO = 1.18            # line spacing as a multiple of pointsize
 
 
-def _fit_font(draw, text_lines, font_path, max_width, max_height):
-    """Largest font size at which all lines fit the box; falls back to default."""
-    from PIL import ImageFont
+def _imagemagick_path() -> Optional[str]:
+    """Resolves the ImageMagick `magick` binary from config, then PATH."""
+    try:
+        import sys
 
-    if not font_path:
-        return ImageFont.load_default()
-    for size in range(160, 28, -6):
-        font = ImageFont.truetype(font_path, size)
-        widths, heights = [], []
-        for line in text_lines:
-            bbox = draw.textbbox((0, 0), line, font=font, stroke_width=max(2, size // 18))
-            widths.append(bbox[2] - bbox[0])
-            heights.append(bbox[3] - bbox[1])
-        if max(widths) <= max_width and (sum(heights) + 14 * len(text_lines)) <= max_height:
-            return font
-    return ImageFont.truetype(font_path, 34)
+        src_dir = os.path.join(_ROOT_DIR, "src")
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
+        from config import get_imagemagick_path
+
+        path = (get_imagemagick_path() or "").strip()
+        if path and os.path.exists(path):
+            return path
+    except Exception:
+        pass
+    import shutil
+
+    return shutil.which("magick") or shutil.which("convert")
 
 
-def overlay_text(base_image_path: str, text: str, out_path: str) -> str:
-    """
-    Draws large, high-contrast text onto a 1280x720 thumbnail.
-
-    The base image is cover-fit to 1280x720; text is bottom-centered with a thick
-    dark stroke for readability over any background.
-    """
-    from PIL import Image, ImageDraw
+def _coverfit_no_text(base_image_path: str, out_path: str) -> str:
+    """Fallback: cover-fit the base to 1280x720 with no text (never crashes)."""
+    from PIL import Image
 
     image = Image.open(base_image_path).convert("RGB")
-    # Cover-fit to exactly 1280x720.
     target_w, target_h = THUMB_SIZE
     scale = max(target_w / image.width, target_h / image.height)
     resized = image.resize((round(image.width * scale), round(image.height * scale)))
     left = (resized.width - target_w) // 2
     top = (resized.height - target_h) // 2
-    canvas = resized.crop((left, top, left + target_w, top + target_h))
-
-    draw = ImageDraw.Draw(canvas)
-    lines = [line for line in (text or "").split("\n") if line.strip()] or [""]
-    font = _fit_font(draw, lines, _font_path(), int(target_w * 0.92), int(target_h * 0.5))
-
-    stroke = max(3, getattr(font, "size", 40) // 14)
-    line_heights = [
-        draw.textbbox((0, 0), line, font=font, stroke_width=stroke)[3]
-        - draw.textbbox((0, 0), line, font=font, stroke_width=stroke)[1]
-        for line in lines
-    ]
-    gap = 14
-    block_height = sum(line_heights) + gap * (len(lines) - 1)
-    y = target_h - block_height - 48  # sit in the lower third
-    for line, line_h in zip(lines, line_heights):
-        bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke)
-        x = (target_w - (bbox[2] - bbox[0])) // 2
-        draw.text(
-            (x, y),
-            line,
-            font=font,
-            fill=(255, 255, 255),
-            stroke_width=stroke,
-            stroke_fill=(0, 0, 0),
-        )
-        y += line_h + gap
-
-    parent = os.path.dirname(out_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    canvas.save(out_path, "PNG")
+    resized.crop((left, top, left + target_w, top + target_h)).save(out_path, "PNG")
     return out_path
+
+
+def _pointsize_for(lines: list) -> int:
+    """Heuristic pointsize that fits the widest line into 1280x720."""
+    target_w, target_h = THUMB_SIZE
+    max_chars = max((len(line) for line in lines), default=1) or 1
+    by_width = (target_w * 0.90) / (max_chars * _CHAR_WIDTH_RATIO)
+    by_height = (target_h * 0.52) / (len(lines) * _LINE_RATIO)
+    return int(max(_MIN_POINTSIZE, min(_MAX_POINTSIZE, by_width, by_height)))
+
+
+def overlay_text(
+    base_image_path: str, text: str, out_path: str, magick_path: Optional[str] = None
+) -> str:
+    """
+    Renders large, high-contrast title text onto a 1280x720 thumbnail using
+    ImageMagick (white fill + black outline, bottom-centered, one annotate pass
+    per line). Falls back to a text-less cover-fit if ImageMagick is missing or
+    fails, so a render never crashes.
+    """
+    import subprocess
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    lines = [line.strip() for line in (text or "").split("\n") if line.strip()]
+    magick = magick_path or _imagemagick_path()
+
+    if not lines or not magick:
+        return _coverfit_no_text(base_image_path, out_path)
+
+    pointsize = _pointsize_for(lines)
+    line_step = int(pointsize * _LINE_RATIO)
+
+    command = [
+        magick, base_image_path,
+        "-resize", "1280x720^", "-gravity", "center", "-extent", "1280x720",
+        "-gravity", "south", "-font", "Arial-Bold", "-pointsize", str(pointsize),
+    ]
+    # Bottom-up: last line sits lowest. Each line: black outline then white fill.
+    for index, line in enumerate(reversed(lines)):
+        offset = 44 + index * line_step
+        command += [
+            "-strokewidth", str(max(6, pointsize // 9)), "-stroke", "black",
+            "-fill", "none", "-annotate", f"+0+{offset}", line,
+            "-stroke", "none", "-fill", "white", "-annotate", f"+0+{offset}", line,
+        ]
+    command.append(out_path)
+
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=120)
+        if result.returncode == 0 and os.path.exists(out_path):
+            return out_path
+        # Retry once without an explicit font (some installs lack Arial-Bold).
+        no_font = [arg for arg in command if arg not in ("-font", "Arial-Bold")]
+        result = subprocess.run(no_font, capture_output=True, timeout=120)
+        if result.returncode == 0 and os.path.exists(out_path):
+            return out_path
+    except Exception:
+        pass
+
+    return _coverfit_no_text(base_image_path, out_path)
 
 
 def render_thumbnail(

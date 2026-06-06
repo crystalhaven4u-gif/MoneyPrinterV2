@@ -98,6 +98,18 @@ class HookScorerTests(unittest.TestCase):
         out = hooks.parse_hook_list('[{"hook": "a"}, {"hook": "b"}]')
         self.assertEqual(out, ["a", "b"])
 
+    def test_parse_hook_list_falls_back_to_numbered_list(self):
+        raw = (
+            "Here are your hooks:\n"
+            "1. The Lost Media iceberg goes deeper than anyone admits.\n"
+            "2) At the bottom waits something nobody has ever found.\n"
+            "- How deep does the Lost Media iceberg really go?\n"
+        )
+        out = hooks.parse_hook_list(raw)
+        self.assertEqual(len(out), 3)
+        self.assertTrue(out[0].startswith("The Lost Media iceberg"))
+        self.assertNotIn("Here are your hooks", out)
+
     def test_parse_scores_clamps_and_scales(self):
         # 0-1 inputs scale to 0-10; out-of-range clamps.
         scores = hooks.parse_scores('{"curiosity": 0.5, "depth_pull": 12, "payoff_promise": -3}')

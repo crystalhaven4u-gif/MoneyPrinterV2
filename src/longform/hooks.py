@@ -41,26 +41,49 @@ def _extract_json(text: str):
     raise ValueError("no JSON found in model output")
 
 
+def _hooks_from_lines(text: str) -> list:
+    """Fallback parser: small models often return a numbered/bulleted list."""
+    hooks = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # Strip leading list markers ("1.", "2)", "-", "*", "•") and quotes.
+        line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip().strip('"').strip()
+        # Skip obvious headers/labels ("Here are 8 hooks:", "Hooks:").
+        if line.endswith(":") or len(line) < 12:
+            continue
+        hooks.append(line)
+    return hooks
+
+
 def parse_hook_list(text: str) -> list:
     """
     Parses an LLM reply into a clean list of hook strings.
 
-    Accepts a JSON array of strings, or a JSON array of objects with a "hook"
-    field. Raises ValueError if nothing usable is found.
+    Accepts a JSON array of strings, a JSON array of {"hook": ...} objects, or
+    (fallback) a plain numbered/bulleted list. Raises ValueError if nothing
+    usable is found.
     """
-    data = _extract_json(text)
-    if isinstance(data, dict):
-        data = data.get("hooks", [])
     hooks = []
-    for item in data or []:
-        if isinstance(item, str):
-            text_value = item.strip()
-        elif isinstance(item, dict):
-            text_value = str(item.get("hook", "")).strip()
-        else:
-            text_value = ""
-        if text_value:
-            hooks.append(text_value)
+    try:
+        data = _extract_json(text)
+        if isinstance(data, dict):
+            data = data.get("hooks", [])
+        for item in data or []:
+            if isinstance(item, str):
+                value = item.strip()
+            elif isinstance(item, dict):
+                value = str(item.get("hook", "")).strip()
+            else:
+                value = ""
+            if value:
+                hooks.append(value)
+    except ValueError:
+        hooks = []
+
+    if not hooks:
+        hooks = _hooks_from_lines(text)
     if not hooks:
         raise ValueError("no hooks parsed from model output")
     return hooks
