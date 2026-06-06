@@ -1,0 +1,43 @@
+{
+  "_comment": "Hooking-title formula bank for the long-form engine's Packaging/Hook modules. Generate 3-5 variants/video using DIFFERENT formulas, then A/B test and feed winners back via the retention loop. Sourced from Q2 2026 research (see YT_Longform_Trends_2026Q2.md). Each title MUST be paid off by the cold open or 2026 'Click-and-Quit' scoring demotes it.",
+  "version": "2026Q2",
+
+  "rules": {
+    "length_chars": [40, 65],
+    "front_load_first_chars": 40,
+    "numbers": "specific, ideally odd (7, 9, 13); precise beats round",
+    "brackets": "one closing (...) or [...] reliably lifts CTR — scope, curiosity kicker, or friction-remover",
+    "power_words": ["blueprint", "secret", "hidden", "exposed", "the real reason", "nobody talks about", "before it's too late", "finally", "proven", "the truth about"],
+    "caps": "selective CAPS on ONE word only; never ALL CAPS + '!!!'",
+    "pronouns": "prefer 'you'/'I' over impersonal",
+    "title_first": "write title before scripting; cold open (first 15-30s) must cash the title's open loop",
+    "avoid": ["payoff-less clickbait gap", "overpromising beyond content", "spoiling the conclusion", "keyword stuffing", "vague 'My Thoughts on X'", "year-stamping evergreen content"]
+  },
+
+  "formulas": [
+    { "id": "compression", "template": "[BIG_VALUE] in [SMALL_TIME]", "example": "30 Years of Business Knowledge in 2hrs 26mins", "psychology": "max density for min investment; precise time = credible", "best_for": ["education", "deep_dive", "business_retrospective"], "sourced": true },
+    { "id": "entire_history", "template": "The Entire History of [TOPIC], Explained", "example": "The Entire History of Rome, Explained", "psychology": "definitive single resource; closes the 'I'd have to research this' loop", "best_for": ["history", "lore", "true_crime_overview"], "sourced": "synthesized" },
+    { "id": "curiosity_gap", "template": "The [CATEGORY] That [SURPRISING_OUTCOME]", "example": "The Decision That Started a War", "psychology": "names category, hides specific — open loop the brain wants closed", "best_for": ["mystery", "essay", "narrative"], "sourced": true },
+    { "id": "the_man_who", "template": "The Man/Woman Who [DID_X]  |  The Day [EVENT]", "example": "The Man Who Saved The World", "psychology": "personalizes a huge event into one human's stakes", "best_for": ["bio_doc", "single_event_retrospective", "war_history", "true_crime"], "sourced": true },
+    { "id": "iceberg", "template": "The [TOPIC] Iceberg Explained", "example": "The Internet Mysteries Iceberg Explained", "psychology": "layer-by-layer 'how deep does it go?' loop pulls viewers through long runtime", "best_for": ["mystery", "internet_culture", "conspiracy", "horror", "lore"], "sourced": true },
+    { "id": "specific_number", "template": "[ODD_NUMBER] [THINGS] That [RESULT]", "example": "13 Unsolved Mysteries Nobody Can Explain", "psychology": "pattern-interrupt + scannable scope; odd outperforms even", "best_for": ["listicle", "ranked_retrospective", "iceberg_hybrid"], "sourced": true },
+    { "id": "hidden_truth", "template": "What They're NOT Telling You About [TOPIC]  |  The Real Reason [X]", "example": "What They Never Told You About the Titanic", "psychology": "implies privileged/suppressed knowledge + conspiracy curiosity", "best_for": ["investigative", "expose", "history_myth"], "sourced": true },
+    { "id": "authority_lead", "template": "[CREDENTIAL] EXPLAINS: [CLAIM]", "example": "Former Detective Explains the Case That Was Never Solved", "psychology": "answers 'why trust this' before it's asked", "best_for": ["finance", "law", "true_crime", "science", "health"], "sourced": true },
+    { "id": "identity_challenge", "template": "[STATEMENT_ABOUT_VIEWER] + [CHALLENGE]", "example": "You've Consumed Enough. It's Time to Start Creating.", "psychology": "confronts self-image; personal pronouns lift CTR", "best_for": ["motivation", "self_improvement", "creator"], "sourced": true },
+    { "id": "blueprint", "template": "My [FRAMEWORK/BLUEPRINT] for [SPECIFIC_RESULT]", "example": "My Exact Framework for Researching Any Topic", "psychology": "signals a replicable system / legitimate shortcut", "best_for": ["business", "finance", "how_to"], "sourced": true },
+    { "id": "warning", "template": "Stop Doing [X] If You Want [RESULT]  |  Why Your [X] Is Failing", "example": "Stop Using This Strategy in 2026 (It's Killing Your Channel)", "psychology": "loss aversion + urgency; avoid-a-mistake beats gain-a-benefit", "best_for": ["educational", "finance", "productivity", "cautionary"], "sourced": true },
+    { "id": "versus", "template": "[A] vs [B]: Which Actually Wins?", "example": "Tesla vs Edison: Who Really Won?", "psychology": "viewers hold an opinion and click to validate it or get a verdict", "best_for": ["comparison", "rivalry_doc", "history_who_won"], "sourced": true },
+    { "id": "provocative_question", "template": "[PROVOCATIVE_QUESTION]?", "example": "What Actually Happened to Flight 370?", "psychology": "brain auto-tries to answer; can't, so it clicks", "best_for": ["unsolved_case", "speculative", "mystery"], "sourced": true },
+    { "id": "extreme_stakes", "template": "[SETUP] + [STAKES/CONSEQUENCE]", "example": "He Had 12 Minutes to Stop a Nuclear War", "psychology": "MrBeast principle: most extreme honest claim = highest click", "best_for": ["survival", "disaster_doc", "true_crime", "narrative_essay"], "sourced": true },
+    { "id": "contrarian", "template": "Why [COMMON_BELIEF] Is Wrong  |  The [TOPIC] Myth Nobody Talks About", "example": "Why Everything You Know About the Pyramids Is Wrong", "psychology": "cognitive dissonance; click to defend belief or learn the twist", "best_for": ["essay", "history_science_myth", "contrarian_deep_dive"], "sourced": true }
+  ],
+
+  "ab_test_workflow": {
+    "variants_per_video": [3, 5],
+    "rule": "each variant uses a DIFFERENT formula",
+    "test": "YouTube Studio native A/B title test (needs 1k+ subs)",
+    "monitor_window_hours": 72,
+    "swap_if_ctr_below_pct": 4,
+    "feedback": "log CTR per formula in the ledger; promote winning formulas as higher-weight templates"
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "_comment": "Standalone faceless long-form engine — discovery + legal sourcing config. NO brand funnel. The scout decides BOTH the niche and the format from live trend + retention signals, then only proceeds if footage can be sourced legally (CC / public-domain / licensed stock). candidate_niche_probes updated from Q2 2026 deep-dive research (see YT_Longform_Trends_2026Q2.md). Edit weights/sources freely; the scout is fully niche-agnostic.",
+
+  "mission": "Pick whatever long-form niche+format is trending hardest and retaining best on YouTube right now, that we can produce from legally-clean footage, and publish it on repeat.",
+
+  "scout_scoring": {
+    "_comment": "Final score = weighted sum of normalized 0-1 signals. No brand/funnel term. sourcing_feasibility is a HARD GATE, not a weight — if footage can't be sourced legally, the topic is dropped regardless of score.",
+    "weights": {
+      "trend_velocity": 0.30,
+      "retention_proxy": 0.25,
+      "search_demand": 0.15,
+      "competition_gap": 0.15,
+      "rpm_band": 0.15
+    },
+    "hard_gates": {
+      "sourcing_feasibility": "Drop topic if we cannot assemble >= target_minutes of legally-licensed footage/visuals for it.",
+      "min_score_to_queue": 0.6,
+      "max_topics_per_run": 10
+    },
+    "trend_velocity_note": "Rate of growth, not absolute volume. A niche climbing fast with thin competition beats a saturated giant. Derive from YouTube search recency + view-velocity of top recent uploads + Google Trends slope.",
+    "retention_proxy_note": "Score the FORMAT, then refine with real channel data once the retention loop has it. Until then use format archetype priors below."
+  },
+
+  "format_archetypes": {
+    "_comment": "Long-form shapes ranked by typical audience retention. Scout favors topics that fit a high-retention shape. PRIORS — overwritten per-niche once your own Analytics data exists.",
+    "listicle_roadmap": 1.0,
+    "ranked_countdown": 0.95,
+    "mystery_open_loop": 0.95,
+    "compilation_themed": 0.9,
+    "rise_and_fall_story": 0.85,
+    "story_narration": 0.85,
+    "how_it_works_explainer": 0.8,
+    "versus_comparison": 0.7
+  },
+
+  "candidate_niche_probes": {
+    "_comment": "Seeds the scout explores and ranks — NOT a fixed list; the scout may discover new niches from trending data. UPDATED from Q2 2026 deep-dive research. research_demand is a qualitative seed signal; the scout still verifies live demand/competition/sourcing per topic. title_formulas reference IDs in title_formulas.json.",
+    "probes": [
+      { "id": "sleep_history", "label": "Boring history to sleep to", "research_demand": "very_high", "saturation": "high_ai_crowded", "queries": ["boring history sleep", "history bedtime story long"], "footage_profile": "PD archival + AI stills + ambient", "default_format": "story_narration", "title_formulas": ["entire_history", "the_man_who"], "note": "Best automation fit + proven multi-million, but very crowded with AI now. Differentiate on accuracy/voice quality." },
+      { "id": "true_crime_doc", "label": "Long-form true crime / interrogation", "research_demand": "very_high", "saturation": "medium", "queries": ["interrogation breakdown", "bodycam documentary", "case explained"], "footage_profile": "LICENSED/CC only + AI reconstruction; PD court docs", "default_format": "mystery_open_loop", "title_formulas": ["the_man_who", "authority_lead", "hidden_truth", "provocative_question"], "note": "High CPM. Footage is the constraint — use CC/licensed + AI reconstruction, never ripped footage." },
+      { "id": "iceberg_deepdive", "label": "Iceberg explained deep-dives", "research_demand": "high", "saturation": "medium", "queries": ["iceberg explained", "the X iceberg"], "footage_profile": "AI visuals + CC stock", "default_format": "mystery_open_loop", "title_formulas": ["iceberg", "specific_number", "curiosity_gap"], "note": "Built-in escalating-curiosity structure; excellent retention shape." },
+      { "id": "business_docs", "label": "Cinematic business rise-and-fall", "research_demand": "high", "saturation": "medium", "queries": ["how X built company", "rise and fall of brand"], "footage_profile": "CC0 stock (Pexels/Pixabay) + AI + PD", "default_format": "rise_and_fall_story", "title_formulas": ["the_man_who", "compression", "extreme_stakes", "versus"], "note": "Highest $/view (business CPM). MagnatesMedia model. Needs strong scripting." },
+      { "id": "reddit_compilation", "label": "Reddit story compilations", "research_demand": "very_high", "saturation": "high", "queries": ["reddit stories narrated", "aita marathon"], "footage_profile": "owned/CC gameplay or ambient b-roll", "default_format": "story_narration", "title_formulas": ["specific_number", "provocative_question", "extreme_stakes"], "note": "Trivially faceless (TTS+text). Crowded; win on story curation + thumbnail." },
+      { "id": "video_essay", "label": "Cinematic research video essays", "research_demand": "high", "saturation": "medium", "queries": ["video essay", "the truth about X"], "footage_profile": "CC stock + AI + PD archival", "default_format": "how_it_works_explainer", "title_formulas": ["curiosity_gap", "contrarian", "hidden_truth", "entire_history"], "note": "Entertainment+education blend; strong binge retention." },
+      { "id": "animated_explainer", "label": "Animated educational explainers", "research_demand": "high", "saturation": "medium", "queries": ["what if X", "how does X work explained"], "footage_profile": "AI-generated visuals (owned) primarily", "default_format": "how_it_works_explainer", "title_formulas": ["provocative_question", "specific_number", "compression"], "note": "Curiosity-gap + clean visuals; evergreen, high share. Mostly AI-generated = clean rights." },
+      { "id": "ambient_sleep", "label": "Ambient sleep / soundscapes", "research_demand": "very_high", "saturation": "high", "queries": ["rain sounds sleep", "8 hour ambient"], "footage_profile": "CC0 nature stock + AI loops; royalty-free audio", "default_format": "compilation_themed", "title_formulas": ["compression"], "note": "Massive watch-time per view, near-zero production, ~$16-20 CPM wellness ads. Crowded but durable." },
+      { "id": "history_doc", "label": "Premium history documentaries", "research_demand": "high", "saturation": "medium", "queries": ["WWII documentary", "empire history"], "footage_profile": "PD archival + CC + AI", "default_format": "story_narration", "title_formulas": ["entire_history", "the_man_who", "compression"], "note": "Authoritative deep narrative; loyal binge audience. Lean on public-domain archival." },
+      { "id": "unsolved_mystery", "label": "Unsolved mysteries and speculative", "research_demand": "high", "saturation": "medium", "queries": ["unsolved mystery", "what happened to X"], "footage_profile": "AI + CC stock + PD", "default_format": "mystery_open_loop", "title_formulas": ["provocative_question", "curiosity_gap", "specific_number"], "note": "Pure open-loop; title question only answered at the end." }
+    ]
+  },
+
+  "legal_sources": {
+    "_comment": "ONLY pull footage/visuals from here. Every clip used MUST be logged in the ledger with source, source_id, license, and attribution_required. This license manifest is your monetization/strike defense.",
+    "video": [
+      { "name": "pexels", "api": "https://api.pexels.com/videos", "license": "Pexels License", "commercial": true, "attribution_required": false, "needs_key": true },
+      { "name": "pixabay", "api": "https://pixabay.com/api/videos/", "license": "Pixabay License (CC0-like)", "commercial": true, "attribution_required": false, "needs_key": true },
+      { "name": "openverse", "api": "https://api.openverse.org/v1/", "license": "CC / public domain (varies per item)", "commercial": "per_item", "attribution_required": "per_item", "needs_key": false },
+      { "name": "internet_archive", "api": "https://archive.org/advancedsearch.php", "license": "Public domain / various (filter PD only)", "commercial": "per_item", "attribution_required": "per_item", "needs_key": false },
+      { "name": "wikimedia_commons", "api": "https://commons.wikimedia.org/w/api.php", "license": "CC / PD (varies)", "commercial": "per_item", "attribution_required": "per_item", "needs_key": false },
+      { "name": "youtube_cc", "api": "YouTube Data API search.list", "params": { "type": "video", "videoLicense": "creativeCommon" }, "license": "Creative Commons (YouTube)", "commercial": true, "attribution_required": true, "needs_key": true, "caution": "Verify each clip is genuinely CC and download via legal means; respect attribution." }
+    ],
+    "images": [
+      { "name": "pexels_images", "api": "https://api.pexels.com/v1/", "license": "Pexels License", "commercial": true },
+      { "name": "pixabay_images", "api": "https://pixabay.com/api/", "license": "Pixabay License", "commercial": true },
+      { "name": "ai_generated", "via": "Gemini / Muapi image+video", "license": "Generated (owned)", "commercial": true }
+    ],
+    "music": [
+      { "name": "youtube_audio_library", "license": "YouTube Audio Library (royalty-free)", "commercial": true },
+      { "name": "pixabay_music", "api": "https://pixabay.com/api/", "license": "Pixabay License", "commercial": true },
+      { "name": "freepd", "url": "https://freepd.com", "license": "Public domain (CC0)", "commercial": true }
+    ]
+  },
+
+  "production": {
+    "target_minutes": 10,
+    "aspect_ratio": "16:9",
+    "resolution": "1920x1080",
+    "voiceover": "elevenlabs_or_openai_tts",
+    "captions": true,
+    "music_bed": true,
+    "shorts_cutdowns_per_video": 3,
+    "_comment": "Each long-form also yields N Shorts from its highest-retention segments to feed the algorithm and grow the channel."
+  }
+}

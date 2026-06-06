@@ -38,5 +38,9 @@
     "platforms": ["tiktok", "instagram"],
     "account_ids": [],
     "auto_crosspost": false
+  },
+  "longform": {
+    "youtube_api_key": "",
+    "daily_quota_budget": 9000
   }
 }

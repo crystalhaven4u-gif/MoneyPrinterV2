@@ -403,3 +403,43 @@ def get_post_bridge_config() -> dict:
             raw_config.get("auto_crosspost", defaults["auto_crosspost"])
         ),
     }
+
+def _get_longform_config() -> dict:
+    """
+    Reads the "longform" config block (safe default empty dict).
+
+    Returns:
+        config (dict): The longform configuration block.
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        raw = json.load(file).get("longform", {})
+    return raw if isinstance(raw, dict) else {}
+
+def get_longform_youtube_api_key() -> str:
+    """
+    Gets the YouTube Data API key for the long-form data farmer.
+
+    The YOUTUBE_API_KEY environment variable takes precedence; otherwise the
+    value of longform.youtube_api_key in config.json is used. This is the READ
+    API key and is intentionally separate from the OAuth upload client.
+
+    Returns:
+        key (str): The API key, or an empty string if unset.
+    """
+    env_key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    return str(_get_longform_config().get("youtube_api_key", "")).strip()
+
+def get_longform_daily_quota_budget() -> int:
+    """
+    Gets the daily YouTube Data API quota budget for the farmer.
+
+    Returns:
+        budget (int): Quota units to spend per day (default 9000 of the
+            10000/day free tier).
+    """
+    try:
+        return int(_get_longform_config().get("daily_quota_budget", 9000))
+    except (TypeError, ValueError):
+        return 9000
