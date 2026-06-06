@@ -136,10 +136,26 @@ def _raise_for_status(response) -> None:
 
 
 def _provider_pollinations(prompt, width, height, aspect_ratio, cfg, session) -> bytes:
-    """Free, keyless Flux endpoint. Returns the raw image bytes directly."""
+    """
+    Free Flux endpoint. Works keyless, but anonymous access is rate-limited
+    (~1 req/15s) and shared/datacenter IPs can be hard-blocked with HTTP 402.
+    An optional ``referrer`` (web apps) or ``token`` (server-side, sent as a
+    Bearer header) lifts the limit -- both are free to register at
+    enter.pollinations.ai.
+    """
+    pollinations = cfg.get("pollinations") or {}
     url = POLLINATIONS_URL.format(prompt=quote(prompt, safe=""))
     params = {"width": width, "height": height, "nologo": "true", "model": "flux"}
-    response = session.request("GET", url, params=params, timeout=120)
+    referrer = (pollinations.get("referrer") or "").strip()
+    if referrer:
+        params["referrer"] = referrer
+
+    headers = {}
+    token = (pollinations.get("token") or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    response = session.request("GET", url, params=params, headers=headers, timeout=120)
     _raise_for_status(response)
     content = getattr(response, "content", b"")
     if not content:
@@ -305,6 +321,7 @@ def load_image_config() -> dict:
         "default_provider": "pollinations",
         "thumbnail_provider": "pollinations",
         "fallback_order": list(DEFAULT_FALLBACK_ORDER),
+        "pollinations": {"referrer": "", "token": ""},
         "cloudflare": {"account_id": "", "api_token": ""},
         "local_sd_url": "",
         "gemini_quality": "standard",

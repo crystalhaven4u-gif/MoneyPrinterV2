@@ -122,7 +122,10 @@ Rules:
 The engine must never hard-depend on one paid image backend. `generate_image(
 prompt, aspect_ratio, output_path, quality="standard")` tries a chosen provider
 and falls back down a configurable chain. Backends:
-- `pollinations` (DEFAULT) — free, keyless. Zero setup.
+- `pollinations` (DEFAULT) — free, keyless. Zero setup. Anonymous access is
+  rate-limited (~1 req/15s) and shared/datacenter IPs may be hard-blocked with
+  HTTP 402; set `image.pollinations.referrer` or `token` (free at
+  enter.pollinations.ai) to lift the limit for headless/automation use.
 - `cloudflare` — Workers AI Flux (free tier); needs `image.cloudflare.account_id`
   + `api_token`.
 - `local_sd` — optional local Stable Diffusion HTTP API at `image.local_sd_url`.

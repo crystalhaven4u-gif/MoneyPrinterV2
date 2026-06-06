@@ -470,6 +470,7 @@ def get_image_config() -> dict:
     """
     raw = _get_image_config()
     cloudflare = raw.get("cloudflare") or {}
+    pollinations = raw.get("pollinations") or {}
     default_provider = str(raw.get("default_provider", "pollinations") or "pollinations")
     return {
         "default_provider": default_provider,
@@ -479,6 +480,10 @@ def get_image_config() -> dict:
         "fallback_order": list(
             raw.get("fallback_order") or ["pollinations", "cloudflare", "gemini"]
         ),
+        "pollinations": {
+            "referrer": str(pollinations.get("referrer", "") or "").strip(),
+            "token": str(pollinations.get("token", "") or "").strip(),
+        },
         "cloudflare": {
             "account_id": str(cloudflare.get("account_id", "") or "").strip(),
             "api_token": str(cloudflare.get("api_token", "") or "").strip(),

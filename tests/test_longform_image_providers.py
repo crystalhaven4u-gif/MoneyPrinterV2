@@ -246,6 +246,38 @@ class BackendDecodeTests(unittest.TestCase):
         with open(self.out, "rb") as handle:
             self.assertEqual(handle.read(), b"SD")
 
+    def test_pollinations_sends_referrer_and_token_when_configured(self):
+        cfg = _cfg(pollinations={"referrer": "mpv2-longform", "token": "secret"})
+        captured = {}
+
+        def handler(method, url, kwargs):
+            captured["params"] = kwargs.get("params", {})
+            captured["headers"] = kwargs.get("headers", {})
+            return FakeResponse(200, content=b"OK")
+
+        session = FakeSession(handler)
+        result = generate_image(
+            "x", output_path=self.out, config=cfg, session=session, log=False
+        )
+        self.assertEqual(result.provider, "pollinations")
+        self.assertEqual(captured["params"].get("referrer"), "mpv2-longform")
+        self.assertEqual(captured["headers"].get("Authorization"), "Bearer secret")
+
+    def test_pollinations_omits_referrer_token_when_unset(self):
+        captured = {}
+
+        def handler(method, url, kwargs):
+            captured["params"] = kwargs.get("params", {})
+            captured["headers"] = kwargs.get("headers", {})
+            return FakeResponse(200, content=b"OK")
+
+        session = FakeSession(handler)
+        generate_image(
+            "x", output_path=self.out, config=FREE_CFG, session=session, log=False
+        )
+        self.assertNotIn("referrer", captured["params"])
+        self.assertNotIn("Authorization", captured["headers"])
+
     def test_provider_arg_overrides_default(self):
         # thumbnail_provider-style override: force cloudflare first.
         cfg = _cfg(cloudflare={"account_id": "a", "api_token": "t"})
