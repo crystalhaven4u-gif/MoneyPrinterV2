@@ -15,6 +15,13 @@ import argparse
 import os
 import sys
 
+# Force UTF-8 so bullets/×/non-ASCII titles render on the Windows cp1252 console.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT_DIR, "src"))
 

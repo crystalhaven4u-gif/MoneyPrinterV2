@@ -14,7 +14,7 @@
     },
     "hard_gates": {
       "sourcing_feasibility": "Drop topic if we cannot assemble >= target_minutes of legally-licensed footage/visuals for it.",
-      "min_score_to_queue": 0.6,
+      "min_score_to_queue": 0.45,
       "max_topics_per_run": 10
     },
     "trend_velocity_note": "Rate of growth, not absolute volume. A niche climbing fast with thin competition beats a saturated giant. Derive from YouTube search recency + view-velocity of top recent uploads + Google Trends slope.",

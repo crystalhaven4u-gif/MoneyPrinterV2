@@ -403,6 +403,12 @@ def main(argv=None) -> int:  # pragma: no cover - exercised live, not in tests
     parser.add_argument("--budget", type=int, default=None, help="Daily quota budget override.")
     parser.add_argument("--max-results", type=int, default=DEFAULT_MAX_RESULTS)
     parser.add_argument("--recency-days", type=int, default=DEFAULT_RECENCY_DAYS)
+    parser.add_argument(
+        "--max-niches",
+        type=int,
+        default=None,
+        help="Dry-run: farm only the first N niche probes (e.g. 3 to confirm the key works cheaply).",
+    )
     args = parser.parse_args(argv)
 
     # Resolve the API key from config/env (lazy import to keep package light).
@@ -423,6 +429,12 @@ def main(argv=None) -> int:  # pragma: no cover - exercised live, not in tests
 
     client = YouTubeDataClient(api_key, daily_budget=budget)
     discovery = load_discovery()
+
+    if args.max_niches is not None:
+        probes = discovery["candidate_niche_probes"]["probes"][: args.max_niches]
+        discovery["candidate_niche_probes"]["probes"] = probes
+        print(f"DRY RUN: limiting to first {len(probes)} niche probes "
+              f"({', '.join(p['id'] for p in probes)}).")
 
     print(f"Farming {len(discovery['candidate_niche_probes']['probes'])} niche probes "
           f"(budget {budget} units)...")
