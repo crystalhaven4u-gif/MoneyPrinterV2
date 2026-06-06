@@ -81,3 +81,38 @@ All config lives in `config.json` at the project root. See `config.example.json`
 ## Contributing
 
 PRs go against `main`. One feature/fix per PR. Open an issue first. Use `WIP` label for in-progress PRs.
+
+## Long-form engine (standalone, no brand) — `src/longform/`
+
+A separate faceless long-form YouTube engine lives under `src/longform/`. It is
+self-contained (depends only on `requests` + stdlib) and shares no logic with
+the Shorts pipeline.
+
+Rules:
+- The scout/farmer chooses niche AND format from live YouTube data. Never
+  hardcode a topic; niche probes in `longform_discovery.json` are seeds, not a
+  fixed list.
+- HARD LEGAL GATE (future render stages): no clip enters a render unless its
+  source is in `longform_discovery.json` `legal_sources` AND its
+  `{source, source_id, license, attribution_required}` is logged. The data
+  farmer records `cc_feasibility` per niche as an early read on sourceability.
+- READ vs WRITE keys are separate: the farmer uses a Data API **key**
+  (`longform.youtube_api_key` / `YOUTUBE_API_KEY`); publishing uses the OAuth
+  upload client. Never mix them.
+- Keep farming non-blocking: API failures retry with backoff; the quota guard
+  stops gracefully before the daily budget and persists partial results.
+- Never publish directly; everything ultimately goes through
+  `review_queue/approved/`.
+
+### Data farmer (this layer)
+- `src/longform/youtube_api.py` — quota-aware Data API v3 client (search.list
+  = 100 units, videos/channels.list = 1; default budget 9000/day).
+- `src/longform/farmer.py` — farms each niche probe; keeps videos > 30 min and
+  > 1M views; computes `view_velocity` (views/day) and `outlier_score`
+  (views/subs); scores with `scout_scoring.weights`; applies
+  `min_score_to_queue`.
+- `src/longform/storage.py` — SQLite `.mp/farm.db`, idempotent upserts.
+- `src/longform/title_match.py` — matches winners against `title_formulas.json`.
+- Outputs: `topics.longform.json` (ranked slate) + `scripts/farm_report.py`.
+- Run a live farm: `python -m longform.farmer` (from `src/`) or
+  `python src/longform/farmer.py`.
