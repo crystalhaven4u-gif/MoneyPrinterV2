@@ -69,6 +69,17 @@ Selenium uses pre-authenticated Firefox profiles (never handles login). The prof
 ### CRON Scheduling
 Uses Python's `schedule` library (in-process, not OS cron). The scheduled job spawns `subprocess.run(["python", "src/cron.py", platform, account_id])`.
 
+## Known environment issue: Pillow/freetype segfault
+The Pillow build in this project's venv (9.5.0, pinned for MoviePy 1.0.3's
+`Image.ANTIALIAS`) segfaults nondeterministically on repeated freetype text
+rendering — `textbbox`/`draw.text` with multi-word strings, multiple font faces,
+or `getlength` after `draw` all trip heap corruption that accumulates across
+calls. The long-form thumbnail overlay was moved off Pillow onto ImageMagick
+because of this. **The Shorts subtitle path (`src/classes/YouTube.py`, which uses
+MoviePy `TextClip` → ImageMagick) likely shares the same underlying fragility if
+it ever falls back to Pillow text;** if Shorts subtitles start crashing, suspect
+this and prefer ImageMagick-based rendering there too.
+
 ## Configuration
 
 All config lives in `config.json` at the project root. See `config.example.json` for the full template and `docs/Configuration.md` for reference. Key external dependencies to configure:
@@ -144,18 +155,42 @@ Rules:
   `image.thumbnail_provider` lets thumbnails use a higher-quality backend
   without touching bulk stills (pass it as the `provider=` arg).
 
+### LLM provider — `src/longform/llm.py`
+Pluggable behind one `llm(prompt)->str` interface (`config.llm`):
+- `provider: openai_compatible` — any OpenAI-style `/chat/completions` endpoint.
+  **Groq's FREE tier is the recommended default** for script quality
+  (`base_url https://api.groq.com/openai/v1`, `model llama-3.3-70b-versatile` —
+  ~20x the local 3B). The key is read from the env var named by
+  `llm.openai_compatible.api_key_env` (default `GROQ_API_KEY`), never stored in
+  config.
+- `provider: ollama` — local Ollama HTTP API; the offline fallback.
+- Non-blocking fallback: if the primary provider errors (no key, network), the
+  call falls back to local Ollama rather than crashing a run.
+- Local helpers detect installed Ollama models (`/api/tags`) + system RAM and
+  recommend the largest viable model (floor `qwen2.5:7b-instruct` /
+  `llama3.1:8b`). `scripts/llm_doctor.py` prints this; weights are NEVER pulled
+  automatically — confirm before `ollama pull`.
+
 ### Creative layer (iceberg track) — script / hooks / packaging
-The creative layer turns a chosen topic into a review-ready package. It uses the
-local Ollama LLM via `src/longform/llm.py` (a thin `requests` client to the
-Ollama HTTP API — not the `ollama` SDK) and is few-shotted on the REAL top
-`iceberg_deepdive` winners in `.mp/farm.db`, never generic priors. Every
+The creative layer turns a chosen topic into a review-ready package. The LLM is
+pluggable (see above; defaults to Groq, falls back to local Ollama) and every
 generator takes an injectable `llm(prompt)->str` so tests never hit a server.
+Few-shot tone comes from the REAL top `iceberg_deepdive` winners in
+`.mp/farm.db`, never generic priors.
 - `prompts/longform_iceberg.yaml` — versioned script-architect prompt (bump
-  `version` on edit; it is recorded in the ledger per script).
-- `src/longform/script.py` — tiered iceberg script: cold_hook (0-15s naming the
-  iceberg + teasing the deepest layer) then tiers surface→obscure→deepest, each
-  ending on a mini open-loop, each with a shot list; ~140 wpm to
-  `production.target_minutes`. Logs prompt_version + entry_count.
+  `version` on edit; recorded in the ledger per script). Current: `iceberg-v2`.
+- `src/longform/script.py` — **staged** generation: (a) OUTLINE pass (tier
+  skeleton + titles + premises + cold_hook + final_payoff), (b) PER-ENTRY pass
+  generating each tier to its own word budget (`target_minutes*140 /
+  entry_count`) with a running-context summary for coherence, (c) LENGTH
+  enforcement (expand if under ~85% of budget, cap 3 retries), (d) reassemble
+  into the cold_hook→tiers→final_payoff schema. Logs prompt_version,
+  entry_count, word_count, and sources.
+- `src/longform/research.py` — optional factual GROUNDING (`config.script.
+  grounding`, default on): pulls REAL candidate entries + facts (free Wikipedia
+  REST API, keyless) into the outline + per-entry prompts so narration is
+  grounded, not invented. Non-blocking; falls back to model-only. Sources used
+  are stored on the `creative_runs` row.
 - `src/longform/hooks.py` — 6-10 cold-open variants, LLM self-scored on
   curiosity / depth-pull / payoff-promise; best kept; all variants + scores
   logged.

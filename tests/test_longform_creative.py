@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -9,7 +10,12 @@ SRC_DIR = os.path.join(ROOT_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from longform import hooks, packaging, script, storage
+from longform import hooks, llm, packaging, research, script, storage
+
+
+def _narration(n_words: int) -> str:
+    """A narration string with exactly n_words tokens (for budget math)."""
+    return " ".join(f"w{i}" for i in range(n_words)) + "."
 
 
 # --------------------------------------------------------------------------- #
@@ -62,28 +68,205 @@ class IcebergScriptParserTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             script.parse_iceberg_script("no json at all here")
 
-    def test_generate_script_uses_injected_llm_and_logs(self):
-        # few-shot reads farm.db; isolate to a temp db so no real winners needed.
+
+# --------------------------------------------------------------------------- #
+# Outline parser
+# --------------------------------------------------------------------------- #
+class OutlineParserTests(unittest.TestCase):
+    OUTLINE = """```json
+    {"cold_hook": "Welcome to the X iceberg; the bottom will disturb you.",
+     "tiers": [
+       {"tier": 1, "label": "Surface", "entry_title": "Known Thing", "premise": "p1", "open_loop": "o1"},
+       {"tier": 2, "label": "Mid", "entry_title": "", "premise": "p2", "open_loop": "o2"},
+       {"tier": 3, "label": "Abyss", "entry_title": "Dark Thing", "premise": "p3", "open_loop": "o3"}
+     ],
+     "final_payoff": "And that is the bottom."}
+    ```"""
+
+    def test_parses_and_drops_empty_titles(self):
+        out = script.parse_outline(self.OUTLINE)
+        self.assertEqual(len(out["tiers"]), 2)  # empty entry_title dropped
+        self.assertTrue(out["cold_hook"])
+        self.assertTrue(out["final_payoff"])
+        self.assertEqual(out["tiers"][0]["entry_title"], "Known Thing")
+
+    def test_raises_without_tiers(self):
+        with self.assertRaises(ValueError):
+            script.parse_outline('{"cold_hook": "x", "tiers": []}')
+
+
+# --------------------------------------------------------------------------- #
+# Per-entry length-enforcement loop
+# --------------------------------------------------------------------------- #
+class LengthEnforcementTests(unittest.TestCase):
+    def test_short_entry_is_expanded_then_accepted(self):
+        short = json.dumps({"narration": _narration(10), "shot_list": ["a"], "open_loop": "next"})
+        long = json.dumps({"narration": _narration(120), "shot_list": ["b"], "open_loop": "next"})
+        calls = {"entry": 0, "expand": 0}
+
+        def fake_llm(prompt):
+            if "TOO SHORT" in prompt:
+                calls["expand"] += 1
+                return long
+            calls["entry"] += 1
+            return short
+
+        tier = {"label": "Surface", "entry_title": "Thing", "premise": "p", "open_loop": "o"}
+        entry = script.generate_entry(
+            "topic", tier, word_budget=100, running_context="ctx", fact="",
+            prompt_cfg={}, llm=fake_llm,
+        )
+        self.assertGreaterEqual(entry["word_count"], 85)  # cleared 85% of 100
+        self.assertEqual(entry["expansions"], 1)
+        self.assertEqual(calls["entry"], 1)
+
+    def test_expand_capped_at_three(self):
+        short = json.dumps({"narration": _narration(10), "shot_list": [], "open_loop": "o"})
+
+        def always_short(prompt):
+            return short  # never reaches budget -> must cap
+
+        tier = {"label": "L", "entry_title": "T", "premise": "p", "open_loop": "o"}
+        entry = script.generate_entry(
+            "topic", tier, word_budget=500, running_context="", fact="",
+            prompt_cfg={}, llm=always_short, max_expand=3,
+        )
+        self.assertEqual(entry["expansions"], 3)  # capped
+
+    def test_staged_generate_script_assembles_and_logs(self):
+        outline = json.dumps({
+            "cold_hook": "Welcome to the Roman Empire iceberg.",
+            "tiers": [
+                {"tier": 1, "label": "Surface", "entry_title": "Aqueducts", "premise": "p1", "open_loop": "o1"},
+                {"tier": 2, "label": "Abyss", "entry_title": "Damnatio Memoriae", "premise": "p2", "open_loop": "o2"},
+            ],
+            "final_payoff": "And that was the bottom.",
+        })
+        entry = json.dumps({"narration": _narration(160), "shot_list": ["s1", "s2"], "open_loop": "deeper"})
+
+        def fake_llm(prompt):
+            return outline if "Build the OUTLINE" in prompt else entry
+
         with tempfile.TemporaryDirectory() as tmp:
             db = os.path.join(tmp, "farm.db")
-            calls = {"n": 0}
-
-            def fake_llm(prompt):
-                calls["n"] += 1
-                # The prompt must carry the versioned instructions + topic.
-                assert "TOPIC: Roman Empire" in prompt
-                return self.SAMPLE
-
             result = script.generate_script(
-                "Roman Empire", llm=fake_llm, target_minutes=10, db_path=db,
-                run_id="run-1",
+                "Roman Empire", llm=fake_llm, target_minutes=2, db_path=db,
+                run_id="run-staged", grounding=False,
             )
-            self.assertEqual(calls["n"], 1)
-            self.assertEqual(result["prompt_version"], "iceberg-v1")
+            self.assertEqual(result["entry_count"], 2)
+            self.assertEqual(result["prompt_version"], "iceberg-v2")
+            self.assertEqual(len(result["per_entry_word_counts"]), 2)
+            self.assertGreater(result["word_count"], 300)
             runs = storage.get_creative_runs(db_path=db)
-            self.assertEqual(len(runs), 1)
             self.assertEqual(runs[0]["entry_count"], 2)
-            self.assertEqual(runs[0]["prompt_version"], "iceberg-v1")
+            self.assertEqual(runs[0]["word_count"], result["word_count"])
+
+    def test_grounding_sources_recorded_when_searcher_returns(self):
+        outline = json.dumps({
+            "cold_hook": "hook", "final_payoff": "end",
+            "tiers": [{"tier": 1, "label": "S", "entry_title": "Aqueducts", "premise": "p", "open_loop": "o"}],
+        })
+        entry = json.dumps({"narration": _narration(40), "shot_list": [], "open_loop": "o"})
+
+        def fake_llm(prompt):
+            return outline if "Build the OUTLINE" in prompt else entry
+
+        def fake_searcher(topic, max_entries):
+            return [{"title": "Aqueducts", "fact": "Roman aqueducts carried water.", "url": "http://w/aqueducts"}]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "farm.db")
+            result = script.generate_script(
+                "Roman Empire", llm=fake_llm, target_minutes=1, db_path=db,
+                run_id="run-grounded", grounding=True, searcher=fake_searcher,
+            )
+            self.assertTrue(result["grounded"])
+            self.assertEqual(result["sources"], ["http://w/aqueducts"])
+            runs = storage.get_creative_runs(db_path=db)
+            self.assertIn("aqueducts", runs[0]["sources"])
+
+
+# --------------------------------------------------------------------------- #
+# Grounding (research) fallback
+# --------------------------------------------------------------------------- #
+class GroundingTests(unittest.TestCase):
+    def test_searcher_exception_falls_back_to_empty(self):
+        def boom(topic, n):
+            raise RuntimeError("network down")
+
+        result = research.gather_entries("x", searcher=boom)
+        self.assertEqual(result, {"entries": [], "sources": []})
+
+    def test_filters_factless_and_collects_sources(self):
+        def searcher(topic, n):
+            return [
+                {"title": "A", "fact": "fact a", "url": "http://a"},
+                {"title": "B", "fact": "", "url": "http://b"},      # dropped (no fact)
+                {"title": "C", "fact": "fact c", "url": "http://c"},
+            ]
+
+        result = research.gather_entries("x", searcher=searcher)
+        self.assertEqual(len(result["entries"]), 2)
+        self.assertEqual(result["sources"], ["http://a", "http://c"])
+
+
+# --------------------------------------------------------------------------- #
+# LLM provider selection + fallback
+# --------------------------------------------------------------------------- #
+class _LLMResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+class _LLMSession:
+    def __init__(self, openai_payload=None, ollama_payload=None):
+        self.openai_payload = openai_payload
+        self.ollama_payload = ollama_payload
+        self.calls = []
+
+    def post(self, url, **kwargs):
+        self.calls.append(url)
+        if "/chat/completions" in url:
+            return _LLMResp(self.openai_payload)
+        return _LLMResp(self.ollama_payload)
+
+
+class LLMProviderTests(unittest.TestCase):
+    def test_openai_compatible_selected_when_keyed(self):
+        session = _LLMSession(openai_payload={"choices": [{"message": {"content": "groq says hi"}}]})
+        cfg = {
+            "provider": "openai_compatible",
+            "model": "llama-3.3-70b-versatile",
+            "openai_compatible": {"base_url": "https://api.groq.com/openai/v1", "api_key": "k", "api_key_env": "GROQ_API_KEY"},
+        }
+        out = llm.make_llm(cfg, session=session)("hello")
+        self.assertEqual(out, "groq says hi")
+        self.assertTrue(any("/chat/completions" in url for url in session.calls))
+
+    def test_ollama_selected_for_ollama_provider(self):
+        session = _LLMSession(ollama_payload={"message": {"content": "local hi"}})
+        cfg = {"provider": "ollama", "model": "llama3.2:3b", "openai_compatible": {}}
+        out = llm.make_llm(cfg, session=session)("hello")
+        self.assertEqual(out, "local hi")
+        self.assertTrue(any("/api/chat" in url for url in session.calls))
+
+    def test_falls_back_to_ollama_when_no_key(self):
+        session = _LLMSession(ollama_payload={"message": {"content": "fallback hi"}})
+        cfg = {
+            "provider": "openai_compatible",
+            "model": "m",
+            "openai_compatible": {"base_url": "https://api.groq.com/openai/v1", "api_key": "", "api_key_env": "GROQ_API_KEY"},
+        }
+        out = llm.make_llm(cfg, session=session)("hello")
+        self.assertEqual(out, "fallback hi")
+        # No key -> openai path raises before any HTTP; only /api/chat is hit.
+        self.assertTrue(all("/api/chat" in url for url in session.calls))
 
 
 # --------------------------------------------------------------------------- #
