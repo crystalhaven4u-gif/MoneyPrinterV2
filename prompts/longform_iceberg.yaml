@@ -1,0 +1,76 @@
+# Iceberg deep-dive script-architect prompt (versioned).
+# The version string is recorded in the ledger with every generated script, so
+# changing this prompt creates a new, traceable lineage. Bump `version` on edit.
+version: iceberg-v1
+
+# Narration pace used to convert production.target_minutes -> a word budget.
+target_wpm: 140
+
+# The iceberg shape the model MUST follow.
+structure:
+  cold_hook:
+    seconds: "0-15"
+    must:
+      - "Name the iceberg explicitly (e.g. 'the <topic> iceberg')."
+      - "Tease the single deepest / most unsettling layer WITHOUT revealing it."
+      - "Promise the payoff: that we descend tier by tier to reach it."
+  tiers:
+    order: "surface -> obscure -> deepest/most unsettling"
+    each_entry_must:
+      - "Belong to a labelled tier (Surface, Shallows, Deep, Abyss, Bedrock...)."
+      - "Have an entry_title (the thing on the iceberg chart)."
+      - "Have narration that explains it in plain, vivid language."
+      - "Have a shot_list: 2-4 concrete visual directions for that entry."
+      - "End on a mini open-loop that teases the NEXT, deeper tier."
+  final_payoff:
+    must:
+      - "Resolve the deepest layer the cold_hook promised."
+      - "Close the loop so the title is fully paid off."
+
+# Output contract: the model must return ONLY this JSON object, no prose.
+output_schema: |
+  {
+    "iceberg_topic": "<topic>",
+    "cold_hook": "<spoken cold open, 0-15s>",
+    "tiers": [
+      {
+        "tier": 1,
+        "label": "Surface",
+        "entry_title": "<chart entry>",
+        "narration": "<spoken narration for this entry>",
+        "shot_list": ["<shot 1>", "<shot 2>"],
+        "open_loop": "<one line teasing the next, deeper tier>"
+      }
+    ],
+    "final_payoff": "<spoken close that resolves the deepest layer>"
+  }
+
+# Style guidance, refreshed at runtime with REAL top performers from farm.db
+# (their titles + durations) so the model imitates proven winners, not priors.
+style:
+  voice: "calm, authoritative documentary narrator; second-person sparingly"
+  pacing: "short sentences; each tier escalates dread/curiosity"
+  avoid:
+    - "breaking the fourth wall or mentioning that this is AI/script"
+    - "revealing the deepest layer before the final_payoff"
+    - "filler like 'in this video' or 'don't forget to subscribe'"
+
+instructions: |
+  You are an expert long-form YouTube script architect specialising in
+  "iceberg" explainer videos. Write a complete narration script for the iceberg
+  on the given TOPIC.
+
+  Follow the iceberg STRUCTURE exactly: a 0-15s cold_hook that names the iceberg
+  and teases (but never reveals) the deepest layer, then TIERED entries ordered
+  surface -> obscure -> deepest. Every entry ends on a mini open-loop teasing the
+  next deeper tier. Finish with a final_payoff that resolves the deepest layer.
+
+  Produce roughly {word_budget} words of narration total (cold_hook + all
+  narration + final_payoff), at about {target_wpm} words/minute for a
+  {target_minutes}-minute video. Aim for {tier_hint} tiers.
+
+  These are REAL top-performing iceberg videos (title — runtime) to imitate in
+  tone, scope, and escalation. Match their style; do NOT copy their topics:
+  {few_shot}
+
+  Return ONLY the JSON object described by the schema. No markdown, no commentary.
