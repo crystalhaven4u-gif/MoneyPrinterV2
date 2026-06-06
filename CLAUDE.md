@@ -117,3 +117,26 @@ Rules:
 - Run a live farm: `python scripts/run_farm.py` (from repo root) or
   `cd src && python -m longform.farmer`. The package uses relative imports, so
   do not run `src/longform/farmer.py` as a loose script.
+
+### Image providers — `src/longform/image_providers.py`
+The engine must never hard-depend on one paid image backend. `generate_image(
+prompt, aspect_ratio, output_path, quality="standard")` tries a chosen provider
+and falls back down a configurable chain. Backends:
+- `pollinations` (DEFAULT) — free, keyless. Zero setup.
+- `cloudflare` — Workers AI Flux (free tier); needs `image.cloudflare.account_id`
+  + `api_token`.
+- `local_sd` — optional local Stable Diffusion HTTP API at `image.local_sd_url`.
+- `gemini` — paid; used ONLY when `quality="high"` AND a Gemini key is set. It
+  reuses the existing `nanobanana2_api_key` (one Gemini key, never duplicated).
+
+Rules:
+- Fallback never crashes a render: if every eligible provider fails, it writes a
+  flagged colored placeholder PNG (`is_placeholder=True`).
+- Free backends cost 0; every call is logged to the `image_log` table in
+  `.mp/farm.db` (provider + cost) via `storage.log_image`.
+- Self-contained: `requests` + stdlib only (placeholder PNG is hand-encoded; no
+  Pillow). Config is resolved by `config.get_image_config()`.
+- Packaging/render stages (future `packaging.py`) MUST call `generate_image()`
+  rather than any backend directly, so swapping providers needs no code change.
+  `image.thumbnail_provider` lets thumbnails use a higher-quality backend
+  without touching bulk stills (pass it as the `provider=` arg).
