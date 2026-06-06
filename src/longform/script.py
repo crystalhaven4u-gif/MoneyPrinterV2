@@ -113,7 +113,7 @@ def parse_outline(text: str) -> dict:
     Parses an OUTLINE reply into {cold_hook, final_payoff, tiers:[{tier, label,
     entry_title, premise, open_loop}]}. Raises ValueError without usable tiers.
     """
-    data = json.loads(_extract_json(text))
+    data = json.loads(_extract_json(text), strict=False)
     if not isinstance(data, dict):
         raise ValueError("outline JSON is not an object")
     raw_tiers = data.get("tiers")
@@ -148,7 +148,7 @@ def parse_outline(text: str) -> dict:
 
 def parse_entry(text: str) -> dict:
     """Parses a PER-ENTRY reply into {narration, shot_list, open_loop}."""
-    data = json.loads(_extract_json(text))
+    data = json.loads(_extract_json(text), strict=False)
     if not isinstance(data, dict):
         raise ValueError("entry JSON is not an object")
     narration = str(data.get("narration", "")).strip()
@@ -164,7 +164,7 @@ def parse_entry(text: str) -> dict:
 # Legacy single-shot parser, retained for compatibility/tests.
 def parse_iceberg_script(text: str) -> dict:
     """Parses a full single-shot iceberg script (legacy contract)."""
-    data = json.loads(_extract_json(text))
+    data = json.loads(_extract_json(text), strict=False)
     if not isinstance(data, dict):
         raise ValueError("parsed JSON is not an object")
     raw_tiers = data.get("tiers")
@@ -418,9 +418,21 @@ def generate_script(
     running_context = outline["cold_hook"]
     for plan in tiers_plan:
         fact = _match_fact(plan["entry_title"], pool)
-        entry = generate_entry(
-            topic, plan, per_entry_budget, running_context, fact, prompt_cfg, llm
-        )
+        try:
+            entry = generate_entry(
+                topic, plan, per_entry_budget, running_context, fact, prompt_cfg, llm
+            )
+        except ValueError:
+            # Non-blocking: a single unparseable tier must not abort the run.
+            # Fall back to the outline premise as minimal narration.
+            premise = plan.get("premise") or plan["entry_title"]
+            entry = {
+                "narration": premise,
+                "shot_list": [],
+                "open_loop": plan.get("open_loop", ""),
+                "word_count": _word_count(premise),
+                "expansions": 0,
+            }
         tiers.append(
             {
                 "tier": plan["tier"],
