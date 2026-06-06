@@ -496,3 +496,59 @@ def get_image_config() -> dict:
             "model": get_nanobanana2_model(),
         },
     }
+
+def _get_llm_config() -> dict:
+    """Reads the "llm" config block (safe default empty dict)."""
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        raw = json.load(file).get("llm", {})
+    return raw if isinstance(raw, dict) else {}
+
+def get_llm_config() -> dict:
+    """
+    Gets the resolved LLM configuration for the long-form creative layer.
+
+    provider is 'ollama' (local, offline fallback) or 'openai_compatible' (any
+    OpenAI-style /chat/completions endpoint -- Groq's FREE tier is the
+    recommended default for script quality). The API key is read from the env
+    var named by openai_compatible.api_key_env (never stored in config). If
+    llm.model is empty, the provider-specific default is used.
+
+    Returns:
+        config (dict): provider, model, and an openai_compatible
+            {base_url, api_key_env, api_key} sub-block.
+    """
+    raw = _get_llm_config()
+    oc = raw.get("openai_compatible") or {}
+    api_key_env = str(oc.get("api_key_env", "GROQ_API_KEY") or "GROQ_API_KEY").strip()
+    return {
+        "provider": str(raw.get("provider", "ollama") or "ollama").strip(),
+        "model": str(raw.get("model", "") or "").strip(),
+        "openai_compatible": {
+            "base_url": str(
+                oc.get("base_url", "https://api.groq.com/openai/v1")
+                or "https://api.groq.com/openai/v1"
+            ).strip(),
+            "api_key_env": api_key_env,
+            "api_key": os.environ.get(api_key_env, "").strip(),
+        },
+    }
+
+def _get_script_config() -> dict:
+    """Reads the "script" config block (safe default empty dict)."""
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        raw = json.load(file).get("script", {})
+    return raw if isinstance(raw, dict) else {}
+
+def get_script_grounding() -> bool:
+    """Whether per-topic factual grounding (web research) is enabled."""
+    value = _get_script_config().get("grounding", True)
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off", "")
+    return bool(value)
+
+def get_script_target_minutes() -> int:
+    """Target runtime in minutes for generated long-form scripts."""
+    try:
+        return int(_get_script_config().get("target_minutes", 10))
+    except (TypeError, ValueError):
+        return 10

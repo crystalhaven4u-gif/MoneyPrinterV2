@@ -51,5 +51,17 @@
     "cloudflare": {"account_id": "", "api_token": ""},
     "local_sd_url": "",
     "gemini_quality": "standard"
+  },
+  "llm": {
+    "provider": "openai_compatible",
+    "model": "llama-3.3-70b-versatile",
+    "openai_compatible": {
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY"
+    }
+  },
+  "script": {
+    "grounding": true,
+    "target_minutes": 10
   }
 }
