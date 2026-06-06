@@ -1,7 +1,12 @@
 # Iceberg deep-dive script-architect prompt (versioned).
 # The version string is recorded in the ledger with every generated script, so
 # changing this prompt creates a new, traceable lineage. Bump `version` on edit.
-version: iceberg-v1
+#
+# v2: staged generation (outline -> per-entry with running context -> length
+# enforcement) plus optional factual grounding. `instructions`/`output_schema`
+# below describe the single-shot legacy contract and are retained for `style`
+# and `few_shot`; the staged prompts live in src/longform/script.py.
+version: iceberg-v2
 
 # Narration pace used to convert production.target_minutes -> a word budget.
 target_wpm: 140
