@@ -236,6 +236,7 @@ CREATIVE_RUN_COLUMNS = (
     "chosen_title",
     "chosen_hook",
     "review_item_path",
+    "sources",
 )
 
 HOOK_VARIANT_COLUMNS = (
@@ -275,10 +276,15 @@ def init_creative_tables(db_path: Optional[str] = None) -> None:
                 word_count        INTEGER,
                 chosen_title      TEXT,
                 chosen_hook       TEXT,
-                review_item_path  TEXT
+                review_item_path  TEXT,
+                sources           TEXT
             )
             """
         )
+        # Migrate older DBs that predate the sources column.
+        existing = {row[1] for row in connection.execute("PRAGMA table_info(creative_runs)")}
+        if "sources" not in existing:
+            connection.execute("ALTER TABLE creative_runs ADD COLUMN sources TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS hook_variants (
