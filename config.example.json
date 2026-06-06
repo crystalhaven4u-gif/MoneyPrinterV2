@@ -42,5 +42,13 @@
   "longform": {
     "youtube_api_key": "",
     "daily_quota_budget": 9000
+  },
+  "image": {
+    "default_provider": "pollinations",
+    "thumbnail_provider": "pollinations",
+    "fallback_order": ["pollinations", "cloudflare", "gemini"],
+    "cloudflare": {"account_id": "", "api_token": ""},
+    "local_sd_url": "",
+    "gemini_quality": "standard"
   }
 }

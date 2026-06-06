@@ -443,3 +443,51 @@ def get_longform_daily_quota_budget() -> int:
         return int(_get_longform_config().get("daily_quota_budget", 9000))
     except (TypeError, ValueError):
         return 9000
+
+def _get_image_config() -> dict:
+    """
+    Reads the "image" config block (safe default empty dict).
+
+    Returns:
+        config (dict): The image-provider configuration block.
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        raw = json.load(file).get("image", {})
+    return raw if isinstance(raw, dict) else {}
+
+def get_image_config() -> dict:
+    """
+    Gets the fully-resolved image-provider configuration for the long-form
+    engine, with safe defaults so the free path works with zero setup.
+
+    The Gemini sub-block reuses the existing Nano Banana 2 (Gemini) credentials
+    rather than duplicating a key -- there is only ever one Gemini key.
+
+    Returns:
+        config (dict): default_provider, thumbnail_provider, fallback_order,
+            cloudflare {account_id, api_token}, local_sd_url, gemini_quality,
+            and a resolved gemini {api_key, base_url, model} sub-block.
+    """
+    raw = _get_image_config()
+    cloudflare = raw.get("cloudflare") or {}
+    default_provider = str(raw.get("default_provider", "pollinations") or "pollinations")
+    return {
+        "default_provider": default_provider,
+        "thumbnail_provider": str(
+            raw.get("thumbnail_provider", default_provider) or default_provider
+        ),
+        "fallback_order": list(
+            raw.get("fallback_order") or ["pollinations", "cloudflare", "gemini"]
+        ),
+        "cloudflare": {
+            "account_id": str(cloudflare.get("account_id", "") or "").strip(),
+            "api_token": str(cloudflare.get("api_token", "") or "").strip(),
+        },
+        "local_sd_url": str(raw.get("local_sd_url", "") or "").strip(),
+        "gemini_quality": str(raw.get("gemini_quality", "standard") or "standard"),
+        "gemini": {
+            "api_key": get_nanobanana2_api_key(),
+            "base_url": get_nanobanana2_api_base_url(),
+            "model": get_nanobanana2_model(),
+        },
+    }
