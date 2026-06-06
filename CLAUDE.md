@@ -114,5 +114,6 @@ Rules:
 - `src/longform/storage.py` — SQLite `.mp/farm.db`, idempotent upserts.
 - `src/longform/title_match.py` — matches winners against `title_formulas.json`.
 - Outputs: `topics.longform.json` (ranked slate) + `scripts/farm_report.py`.
-- Run a live farm: `python -m longform.farmer` (from `src/`) or
-  `python src/longform/farmer.py`.
+- Run a live farm: `python scripts/run_farm.py` (from repo root) or
+  `cd src && python -m longform.farmer`. The package uses relative imports, so
+  do not run `src/longform/farmer.py` as a loose script.
