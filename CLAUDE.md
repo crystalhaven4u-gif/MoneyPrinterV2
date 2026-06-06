@@ -143,3 +143,28 @@ Rules:
   rather than any backend directly, so swapping providers needs no code change.
   `image.thumbnail_provider` lets thumbnails use a higher-quality backend
   without touching bulk stills (pass it as the `provider=` arg).
+
+### Creative layer (iceberg track) — script / hooks / packaging
+The creative layer turns a chosen topic into a review-ready package. It uses the
+local Ollama LLM via `src/longform/llm.py` (a thin `requests` client to the
+Ollama HTTP API — not the `ollama` SDK) and is few-shotted on the REAL top
+`iceberg_deepdive` winners in `.mp/farm.db`, never generic priors. Every
+generator takes an injectable `llm(prompt)->str` so tests never hit a server.
+- `prompts/longform_iceberg.yaml` — versioned script-architect prompt (bump
+  `version` on edit; it is recorded in the ledger per script).
+- `src/longform/script.py` — tiered iceberg script: cold_hook (0-15s naming the
+  iceberg + teasing the deepest layer) then tiers surface→obscure→deepest, each
+  ending on a mini open-loop, each with a shot list; ~140 wpm to
+  `production.target_minutes`. Logs prompt_version + entry_count.
+- `src/longform/hooks.py` — 6-10 cold-open variants, LLM self-scored on
+  curiosity / depth-pull / payoff-promise; best kept; all variants + scores
+  logged.
+- `src/longform/packaging.py` — 5 titles (iceberg + specific_number +
+  curiosity_gap) and 3 tiered thumbnail concepts; thumbnails are rendered by
+  calling `image_providers.generate_image()` (free Pollinations path) at
+  1280x720 then overlaying big PIL text. Writes ONE review item to
+  `review_queue/pending/<run_id>/` (gitignored) and logs the chosen title/hook.
+- Creative ledger tables live in `.mp/farm.db`: `creative_runs`, `hook_variants`,
+  `title_variants`.
+- This layer may use PyYAML + Pillow (render-side); the data farmer core
+  (`youtube_api`, `farmer`, `storage`, `image_providers`) stays requests+stdlib.
