@@ -12,10 +12,17 @@ the network.
 """
 
 import os
+import re
+import time
 from typing import Callable, Optional
 from urllib.parse import quote
 
 import requests
+
+# Politeness delay between Wikipedia requests (reduces 429s on shared IPs).
+# Patchable so tests never actually sleep.
+_sleep = time.sleep
+_REQUEST_DELAY = 0.2
 
 WIKI_ACTION_API = "https://en.wikipedia.org/w/api.php"
 WIKI_REST_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary"
@@ -26,15 +33,17 @@ def _http(session):
     return session if session is not None else requests
 
 
-def _opensearch(query: str, limit: int, session=None) -> list:
-    """Returns [(title, url)] candidates for a query via Wikipedia opensearch."""
+def _fulltext_search(query: str, limit: int, session=None) -> list:
+    """Returns candidate page titles via Wikipedia full-text search (relevance
+    ranked -- far more topical than prefix opensearch)."""
     response = _http(session).get(
         WIKI_ACTION_API,
         params={
-            "action": "opensearch",
-            "search": query,
-            "limit": limit,
-            "namespace": 0,
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "srlimit": limit,
+            "srnamespace": 0,
             "format": "json",
         },
         headers={"User-Agent": _USER_AGENT},
@@ -42,9 +51,16 @@ def _opensearch(query: str, limit: int, session=None) -> list:
     )
     response.raise_for_status()
     data = response.json()
-    titles = data[1] if len(data) > 1 else []
-    urls = data[3] if len(data) > 3 else []
-    return list(zip(titles, urls + [""] * (len(titles) - len(urls))))
+    return [hit.get("title", "") for hit in (data.get("query", {}).get("search", [])) if hit.get("title")]
+
+
+def _is_relevant(topic: str, title: str, fact: str) -> bool:
+    """Keep entries that share a meaningful token with the topic (drop noise)."""
+    topic_tokens = {t for t in re.findall(r"\w+", topic.lower()) if len(t) > 3}
+    if not topic_tokens:
+        return True
+    haystack = f"{title} {fact}".lower()
+    return any(token in haystack for token in topic_tokens)
 
 
 def _summary(title: str, session=None) -> dict:
@@ -68,35 +84,42 @@ def _wikipedia_searcher(session=None) -> Callable[[str, int], list]:
     """Default searcher: opensearch across query variants + REST summaries."""
 
     def search(topic: str, max_entries: int) -> list:
+        # Quote the topic as a phrase first so an ambiguous term (e.g. "lost
+        # media") matches the concept, not every page containing one word.
         queries = [
+            f'"{topic}"',
             topic,
-            f"{topic} list",
-            f"{topic} controversies",
-            f"{topic} unexplained",
+            f"{topic} controversies unexplained",
         ]
         seen_titles = set()
         candidates = []
         for query in queries:
             try:
-                for title, url in _opensearch(query, max_entries, session=session):
+                for title in _fulltext_search(query, max_entries, session=session):
                     if title and title not in seen_titles:
                         seen_titles.add(title)
-                        candidates.append((title, url))
+                        candidates.append(title)
             except Exception:
                 continue
             if len(candidates) >= max_entries * 2:
                 break
 
         entries = []
-        for title, _url in candidates:
+        for title in candidates:
             if len(entries) >= max_entries:
                 break
-            try:
-                summary = _summary(title, session=session)
-            except Exception:
-                continue
-            if summary.get("fact"):
+            summary = None
+            for attempt in range(2):  # one retry to ride out a transient 429
+                try:
+                    summary = _summary(title, session=session)
+                    break
+                except Exception:
+                    _sleep(_REQUEST_DELAY * (attempt + 1))
+            if summary and summary.get("fact") and _is_relevant(
+                topic, summary["title"], summary["fact"]
+            ):
                 entries.append(summary)
+            _sleep(_REQUEST_DELAY)
         return entries
 
     return search
