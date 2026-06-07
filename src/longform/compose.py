@@ -423,12 +423,12 @@ def produce(
                 continue
             all_assets.append(asset)
             src = asset.get("source", "")
-            if asset.get("kind") in ("video",) and src not in ("ai_generated", "slate"):
-                counts["real_clips"] += 1
-            elif src == "ai_generated":
+            if src == "ai_generated":
                 counts["ai_fallbacks"] += 1
-            else:
+            elif src == "slate":
                 counts["slates"] += 1
+            else:  # any real sourced asset (pexels/pixabay video, openverse image)
+                counts["real_clips"] += 1
             clip = render_shot_clip(asset, per_shot, os.path.join(sec_dir, f"clip{len(clips)}.mp4"), ffmpeg_path)
             if clip:
                 clips.append(clip)
