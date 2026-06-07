@@ -206,3 +206,27 @@ Few-shot tone comes from the REAL top `iceberg_deepdive` winners in
   `title_variants`.
 - This layer may use PyYAML + Pillow (render-side); the data farmer core
   (`youtube_api`, `farmer`, `storage`, `image_providers`) stays requests+stdlib.
+
+### Production layer (script -> 1080p MP4) — tts / sourcer / compose
+Turns a finished script into a real 16:9 1080p MP4. **Requires ffmpeg** (set
+`ffmpeg_path` in config, or have it on PATH); `scripts/produce_video.py
+<run_id>` renders a review item. Everything is non-blocking — a single
+API/clip/caption failure falls back and is logged; a render never crashes.
+- `src/longform/tts.py` — provider interface; default `edge_tts` (free, keyless;
+  exposes WordBoundary timings for caption sync), optional `elevenlabs`. Falls
+  back to a silent track + estimated word timings. Config: `tts.provider`,
+  `tts.voice`.
+- `src/longform/sourcer.py` — per shot, queries `legal_sources` (Pexels/Pixabay
+  with keys; Openverse keyless), filters to commercial-safe licenses, downloads,
+  and perceptual-hash dedupes so no clip repeats. Falls back to an AI image
+  (`image_providers.generate_image`) then a colored slate. HARD RULE: every
+  asset is logged to the `asset_log` ledger with {source, source_id, url,
+  license, attribution_required}; `storage.license_manifest()` flags any
+  unlicensed asset. Stock keys come from env (`PEXELS_API_KEY`/`PIXABAY_API_KEY`).
+- `src/longform/compose.py` — 1080p compositor: per-shot clips timed to the
+  section VO (Ken-Burns on stills), cross-dissolves, captions burned from TTS
+  word timings via **ImageMagick** (never Pillow), ducked royalty-free music from
+  `assets/music/`, YouTube chapter markers embedded + a description chapter list,
+  and an auto-appended credits slate for attribution-required assets. Output MP4
+  + `production_metadata.json` go to `review_queue/pending/<run_id>/`. Nothing
+  publishes.
