@@ -9,7 +9,7 @@ SRC_DIR = os.path.join(ROOT_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from longform import compose, sourcer, storage, tts
+from longform import compose, music, sourcer, storage, tts
 
 
 def _touch(path, data=b"x"):
@@ -170,6 +170,59 @@ class CaptionTimingTests(unittest.TestCase):
             {"attribution_required": False, "attribution": ""},
         ]
         self.assertEqual(compose.build_credits(assets), ["Jane via openverse (CC BY)"])
+
+
+# --------------------------------------------------------------------------- #
+# Music bed fetch (no real network)
+# --------------------------------------------------------------------------- #
+class MusicTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dest = self._tmp.name
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _provider(self, license_str="cc-by", title="Dark Drone"):
+        def provider(mood, cfg, session):
+            return [{"source": "openverse", "source_id": "aud1",
+                     "url": "http://ov/a", "download_url": "http://ov/a.mp3",
+                     "license": license_str, "attribution_required": "by" in license_str,
+                     "author": "Composer X", "title": title}]
+        return provider
+
+    def test_fetch_logs_license_and_caches(self):
+        calls = {"n": 0}
+
+        def fake_download(url, dest, session=None):
+            calls["n"] += 1
+            return _touch(dest)
+
+        with patch.object(music.sourcer, "download", side_effect=fake_download):
+            rec = music.fetch_music_bed("dark ambient", self.dest,
+                                        providers=[self._provider("cc-by")])
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec["source"], "openverse")
+            self.assertTrue(rec["attribution_required"])
+            self.assertIn("Dark Drone", rec["attribution"])
+            # second call hits cache -> no extra download
+            rec2 = music.fetch_music_bed("dark ambient", self.dest,
+                                         providers=[self._provider("cc-by")])
+            self.assertEqual(rec2["source"], "openverse")
+            self.assertEqual(calls["n"], 1)  # cached
+
+    def test_noncommercial_rejected_then_none(self):
+        with patch.object(music.sourcer, "download", side_effect=lambda u, d, session=None: _touch(d)):
+            rec = music.fetch_music_bed("x", self.dest,
+                                        providers=[self._provider("cc-by-nc")], cache=False)
+        self.assertIsNone(rec)  # NC filtered out, no other provider
+
+    def test_provider_error_returns_none(self):
+        def boom(mood, cfg, session):
+            raise RuntimeError("down")
+
+        rec = music.fetch_music_bed("x", self.dest, providers=[boom], cache=False)
+        self.assertIsNone(rec)
 
 
 # --------------------------------------------------------------------------- #
