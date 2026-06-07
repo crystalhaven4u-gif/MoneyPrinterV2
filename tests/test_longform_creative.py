@@ -195,7 +195,7 @@ class GroundingTests(unittest.TestCase):
             raise RuntimeError("network down")
 
         result = research.gather_entries("x", searcher=boom)
-        self.assertEqual(result, {"entries": [], "sources": []})
+        self.assertEqual(result, {"entries": [], "sources": [], "rejected": []})
 
     def test_filters_factless_and_collects_sources(self):
         def searcher(topic, n):
@@ -208,6 +208,39 @@ class GroundingTests(unittest.TestCase):
         result = research.gather_entries("x", searcher=searcher)
         self.assertEqual(len(result["entries"]), 2)
         self.assertEqual(result["sources"], ["http://a", "http://c"])
+
+    def test_llm_filter_drops_off_topic_candidate(self):
+        def searcher(topic, n):
+            return [
+                {"title": "Lost media", "fact": "Media that no longer exists.", "url": "http://a"},
+                {"title": "Boone Carlyle", "fact": "A character in the TV series Lost.", "url": "http://b"},
+            ]
+
+        def fake_llm(prompt):
+            self.assertIn("ON-TOPIC", prompt)
+            return ('[{"index": 0, "on_topic": true, "reason": "core concept"}, '
+                    '{"index": 1, "on_topic": false, "reason": "TV character, not lost media"}]')
+
+        result = research.gather_entries("Lost Media", searcher=searcher, llm=fake_llm)
+        self.assertEqual([e["title"] for e in result["entries"]], ["Lost media"])
+        self.assertEqual(result["sources"], ["http://a"])
+        self.assertEqual(len(result["rejected"]), 1)
+        self.assertEqual(result["rejected"][0]["title"], "Boone Carlyle")
+        self.assertIn("TV character", result["rejected"][0]["reason"])
+
+    def test_llm_filter_error_keeps_all(self):
+        def searcher(topic, n):
+            return [
+                {"title": "A", "fact": "x", "url": "http://a"},
+                {"title": "B", "fact": "y", "url": "http://b"},
+            ]
+
+        def boom_llm(prompt):
+            raise RuntimeError("llm down")
+
+        result = research.gather_entries("t", searcher=searcher, llm=boom_llm)
+        self.assertEqual(len(result["entries"]), 2)  # non-blocking: keep all
+        self.assertEqual(result["rejected"], [])
 
 
 # --------------------------------------------------------------------------- #

@@ -54,11 +54,18 @@ def main(argv=None) -> int:
     for row in script.get("per_entry_word_counts", []):
         print(f"  {row['word_count']:4d} words ({row['expansions']} expansions)  {row['entry_title']}")
 
-    print("\nSOURCES (grounding):")
+    print("\nSOURCES KEPT (grounding):")
     for url in script.get("sources", []):
-        print(f"  - {url}")
+        print(f"  + {url}")
     if not script.get("sources"):
         print("  (none — grounding returned nothing or was throttled; model-only fallback)")
+
+    rejected = script.get("rejected_sources", [])
+    print(f"\nSOURCES REJECTED by relevance filter ({len(rejected)}):")
+    for item in rejected:
+        print(f"  - {item.get('title')} ({item.get('url')}) :: {item.get('reason')}")
+    if not rejected:
+        print("  (none rejected)")
 
     print(f"\nCHOSEN TITLE   : {summary['chosen_title']}")
     print(f"CHOSEN HOOK    : {summary['chosen_hook']}")

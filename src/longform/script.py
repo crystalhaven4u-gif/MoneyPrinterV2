@@ -398,10 +398,11 @@ def generate_script(
             grounding = get_script_grounding()
         except Exception:
             grounding = True
-    pool, sources = [], []
+    pool, sources, rejected_sources = [], [], []
     if grounding:
-        result = research.gather_entries(topic, searcher=searcher)
+        result = research.gather_entries(topic, searcher=searcher, llm=llm)
         pool, sources = result["entries"], result["sources"]
+        rejected_sources = result.get("rejected", [])
 
     few_shot = get_few_shot_winners(db_path=db_path, limit=few_shot_n)
     n_tiers = max(5, min(9, round(target_minutes * 0.8)))
@@ -469,6 +470,7 @@ def generate_script(
         "run_id": run_id,
         "grounded": bool(pool),
         "sources": sources,
+        "rejected_sources": rejected_sources,
     }
 
     if log:

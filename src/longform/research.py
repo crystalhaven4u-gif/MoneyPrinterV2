@@ -125,11 +125,79 @@ def _wikipedia_searcher(session=None) -> Callable[[str, int], list]:
     return search
 
 
+def _extract_json_array(text: str):
+    """Parses the first JSON array out of an LLM reply (control-char tolerant)."""
+    import json
+
+    if not text:
+        raise ValueError("empty model output")
+    cleaned = text.strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", cleaned, re.DOTALL)
+    if fence:
+        cleaned = fence.group(1).strip()
+    start = cleaned.find("[")
+    end = cleaned.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("no JSON array found")
+    return json.loads(cleaned[start : end + 1], strict=False)
+
+
+def filter_relevant(topic: str, entries: list, llm: Callable[[str], str]) -> tuple:
+    """
+    Uses the LLM to drop candidates that aren't genuinely on-topic for ``topic``.
+
+    Returns (kept, rejected). Each rejected entry carries a ``reason``. Fully
+    non-blocking: any error (LLM failure, unparseable verdicts) keeps ALL entries
+    so grounding falls back to the phrase-match behaviour rather than going empty.
+    """
+    if not entries or llm is None:
+        return entries, []
+
+    listing = "\n".join(
+        f"{index}. {entry['title']}: {entry['fact'][:200]}"
+        for index, entry in enumerate(entries)
+    )
+    prompt = (
+        f"We are building a YouTube 'iceberg' deep-dive specifically about the "
+        f"subject: {topic}.\n\n"
+        f"Judge whether each candidate below is genuinely ON-TOPIC for THAT exact "
+        f"subject -- not merely sharing a word with it. For example, for the "
+        f"subject 'Lost Media', a Wikipedia page about the TV series 'Lost' or "
+        f"its characters is OFF-topic.\n\n"
+        f"Return ONLY a JSON array, one object per candidate:\n"
+        f'[{{"index": <int>, "on_topic": <true|false>, "reason": "<short>"}}]\n\n'
+        f"CANDIDATES:\n{listing}"
+    )
+
+    try:
+        verdicts = _extract_json_array(llm(prompt))
+    except Exception:
+        return entries, []  # non-blocking: keep all on any failure
+
+    by_index = {}
+    for verdict in verdicts:
+        if isinstance(verdict, dict) and "index" in verdict:
+            try:
+                by_index[int(verdict["index"])] = verdict
+            except (TypeError, ValueError):
+                continue
+
+    kept, rejected = [], []
+    for index, entry in enumerate(entries):
+        verdict = by_index.get(index)
+        if verdict is not None and verdict.get("on_topic") is False:
+            rejected.append({**entry, "reason": str(verdict.get("reason", "")).strip()})
+        else:
+            kept.append(entry)  # default-keep on missing/ambiguous verdict
+    return kept, rejected
+
+
 def gather_entries(
     topic: str,
     max_entries: int = 12,
     searcher: Optional[Callable[[str, int], list]] = None,
     session=None,
+    llm: Optional[Callable[[str], str]] = None,
 ) -> dict:
     """
     Gathers grounded candidate entries for ``topic``.
@@ -140,10 +208,13 @@ def gather_entries(
         searcher: ``searcher(topic, max_entries) -> list[{title, fact, url}]``.
             Defaults to the Wikipedia searcher; injected in tests.
         session: requests-like HTTP object for the default searcher.
+        llm: optional ``llm(prompt)->str``; when given, an LLM relevance filter
+            drops off-topic candidates before they enter the pool (non-blocking).
 
     Returns:
-        result (dict): {"entries": [{title, fact, url}], "sources": [url, ...]}.
-        Always returns cleanly (empty pool) on any failure -- never raises.
+        result (dict): {"entries": [{title, fact, url}], "sources": [url, ...],
+        "rejected": [{title, url, reason}, ...]}. Always returns cleanly on any
+        failure -- never raises.
     """
     fn = searcher or _wikipedia_searcher(session)
     try:
@@ -152,7 +223,6 @@ def gather_entries(
         raw = []
 
     entries = []
-    sources = []
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -167,12 +237,22 @@ def gather_entries(
         if not entry["title"]:
             continue
         entries.append(entry)
-        if entry["url"] and entry["url"] not in sources:
-            sources.append(entry["url"])
         if len(entries) >= max_entries:
             break
 
-    return {"entries": entries, "sources": sources}
+    rejected = []
+    if llm is not None and entries:
+        try:
+            entries, rejected = filter_relevant(topic, entries, llm)
+        except Exception:
+            rejected = []  # non-blocking: keep the unfiltered pool
+
+    sources = []
+    for entry in entries:
+        if entry.get("url") and entry["url"] not in sources:
+            sources.append(entry["url"])
+
+    return {"entries": entries, "sources": sources, "rejected": rejected}
 
 
 def format_entries_for_prompt(entries, limit: Optional[int] = None) -> str:
