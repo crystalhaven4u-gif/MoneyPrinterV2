@@ -57,7 +57,8 @@
     "model": "llama-3.3-70b-versatile",
     "openai_compatible": {
       "base_url": "https://api.groq.com/openai/v1",
-      "api_key_env": "GROQ_API_KEY"
+      "api_key_env": "GROQ_API_KEY",
+      "api_key": ""
     }
   },
   "script": {

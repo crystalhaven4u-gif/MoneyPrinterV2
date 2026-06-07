@@ -529,7 +529,10 @@ def get_llm_config() -> dict:
                 or "https://api.groq.com/openai/v1"
             ).strip(),
             "api_key_env": api_key_env,
-            "api_key": os.environ.get(api_key_env, "").strip(),
+            # Env var takes precedence; otherwise an inline api_key in the
+            # (gitignored) config is used so the key can persist locally.
+            "api_key": os.environ.get(api_key_env, "").strip()
+            or str(oc.get("api_key", "") or "").strip(),
         },
     }
 
