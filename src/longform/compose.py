@@ -355,6 +355,7 @@ def produce(
     out_dir: str,
     source_shot_fn,
     tts_fn,
+    music_fetch_fn=None,
     ffmpeg_path: str = "ffmpeg",
     magick_path: str = "magick",
     music_dir: Optional[str] = None,
@@ -455,6 +456,36 @@ def produce(
         actual = probe_duration(seg_av, ffmpeg_path) or duration
         chapter_specs.append({"title": title, "duration": actual})
 
+    # Music bed (fetched once; logged so it joins the manifest + credits).
+    music_record = None
+    if music_fetch_fn is not None:
+        try:
+            music_record = music_fetch_fn()
+        except Exception:
+            music_record = None
+    if music_record and music_record.get("path"):
+        all_assets.append({
+            "attribution_required": bool(music_record.get("attribution_required")),
+            "attribution": music_record.get("attribution", ""),
+        })
+        if db_path is not False:
+            from datetime import datetime, timezone
+
+            from . import storage
+            try:
+                storage.log_asset({
+                    "run_id": run_id, "created_at": datetime.now(timezone.utc).isoformat(),
+                    "shot_index": -1, "entry_title": "music", "shot_text": "music bed",
+                    "kind": "music", "source": music_record.get("source", ""),
+                    "source_id": music_record.get("source_id", ""), "url": music_record.get("url", ""),
+                    "license": music_record.get("license", ""),
+                    "attribution_required": int(bool(music_record.get("attribution_required"))),
+                    "attribution": music_record.get("attribution", ""),
+                    "path": music_record.get("path", ""),
+                }, db_path=db_path)
+            except Exception:
+                pass
+
     # Assemble
     chapters = build_chapters(chapter_specs)
     credits = build_credits(all_assets)
@@ -468,7 +499,7 @@ def produce(
             base = joined or base
 
     if base:
-        music = _first_music(music_dir)
+        music = (music_record or {}).get("path") or _first_music(music_dir)
         base = mix_music(base, music, os.path.join(work_dir, "music.mp4"), ffmpeg_path)
         final = os.path.join(out_dir, f"{run_id}_final.mp4")
         base = embed_chapters(base, chapters, final, ffmpeg_path) or base
@@ -486,4 +517,5 @@ def produce(
         "real_clips": counts["real_clips"], "ai_fallbacks": counts["ai_fallbacks"],
         "slates": counts["slates"], "failed_shots": counts["failed_shots"],
         "sections": len(section_videos), "assets": all_assets,
+        "music": music_record,
     }

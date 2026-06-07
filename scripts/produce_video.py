@@ -27,7 +27,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 import requests
 
-from longform import compose, image_providers, sourcer, storage, tts
+from longform import compose, image_providers, music, sourcer, storage, tts
 
 
 def main(argv=None) -> int:
@@ -81,8 +81,13 @@ def main(argv=None) -> int:
     def tts_fn(text, out_path):
         return tts.synthesize_section(text, out_path, cfg=tts_cfg)
 
+    mood = footage_cfg.get("music_mood", "dark ambient")
+
+    def music_fetch_fn():
+        return music.fetch_music_bed(mood, music_dir, cfg=footage_cfg, session=session)
+
     report = compose.produce(
-        script, run_id, item_dir, source_shot_fn, tts_fn,
+        script, run_id, item_dir, source_shot_fn, tts_fn, music_fetch_fn=music_fetch_fn,
         ffmpeg_path=ffmpeg_path, magick_path=magick_path, music_dir=music_dir,
         db_path=None,
     )
@@ -122,6 +127,12 @@ def main(argv=None) -> int:
     print(f"failed shots    : {report['failed_shots']}")
     print(f"license manifest complete: {manifest['complete']} "
           f"({len(manifest['assets'])} assets, {len(manifest['unlicensed'])} unlicensed)")
+    track = report.get("music")
+    if track:
+        print(f"music track     : \"{track.get('title')}\" by {track.get('author') or 'n/a'} "
+              f"[{track.get('source')} / {track.get('license')}] {track.get('url')}")
+    else:
+        print("music track     : (none fetched; local bed or silence)")
     print(f"credits         : {report['credits'] or '(none required)'}")
     print(f"\nCHAPTERS:\n{report['chapters_text']}")
     print(f"\nmetadata sidecar: {meta_path}")
