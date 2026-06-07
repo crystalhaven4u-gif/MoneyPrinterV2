@@ -17,3 +17,9 @@ faster-whisper
 srt_equalizer
 undetected_chromedriver
 platformdirs
+edge-tts
+imagehash
+PyYAML
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2

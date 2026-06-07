@@ -64,5 +64,16 @@
   "script": {
     "grounding": true,
     "target_minutes": 10
+  },
+  "ffmpeg_path": "ffmpeg",
+  "tts": {
+    "provider": "edge_tts",
+    "voice": "en-US-GuyNeural",
+    "elevenlabs": {"api_key_env": "ELEVENLABS_API_KEY", "voice_id": ""}
+  },
+  "footage": {
+    "pexels_api_key_env": "PEXELS_API_KEY",
+    "pixabay_api_key_env": "PIXABAY_API_KEY",
+    "music_dir": "assets/music"
   }
 }

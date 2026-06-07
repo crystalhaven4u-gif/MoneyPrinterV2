@@ -405,3 +405,99 @@ def get_title_variants(run_id: str, db_path: Optional[str] = None) -> list:
         return [dict(row) for row in rows]
     finally:
         connection.close()
+
+
+# --------------------------------------------------------------------------- #
+# Asset ledger (footage / images used in a render)
+# --------------------------------------------------------------------------- #
+# One row per visual asset placed in a video. The license fields are MANDATORY:
+# a shot whose asset has no logged license is a failure, not a silent skip (the
+# manifest is the monetization / copyright-strike defence).
+ASSET_LOG_COLUMNS = (
+    "run_id",
+    "created_at",
+    "shot_index",
+    "entry_title",
+    "shot_text",
+    "kind",                 # clip | image | slate
+    "source",               # pexels | pixabay | openverse | ai_generated | slate ...
+    "source_id",
+    "url",
+    "license",
+    "attribution_required",  # 0/1
+    "attribution",           # credit string, if required
+    "path",
+)
+
+
+def init_asset_log(db_path: Optional[str] = None) -> None:
+    """Creates the ``asset_log`` table if it does not exist."""
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS asset_log (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id               TEXT,
+                created_at           TEXT,
+                shot_index           INTEGER,
+                entry_title          TEXT,
+                shot_text            TEXT,
+                kind                 TEXT,
+                source               TEXT,
+                source_id            TEXT,
+                url                  TEXT,
+                license              TEXT,
+                attribution_required INTEGER,
+                attribution          TEXT,
+                path                 TEXT
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def log_asset(record: dict, db_path: Optional[str] = None) -> None:
+    """Records one placed asset with its full license provenance."""
+    init_asset_log(db_path)
+    placeholders = ", ".join("?" for _ in ASSET_LOG_COLUMNS)
+    values = [record.get(column) for column in ASSET_LOG_COLUMNS]
+    sql = f"INSERT INTO asset_log ({', '.join(ASSET_LOG_COLUMNS)}) VALUES ({placeholders})"
+    connection = _connect(db_path)
+    try:
+        connection.execute(sql, values)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def get_assets(run_id: str, db_path: Optional[str] = None) -> list:
+    """Returns all assets logged for a run, in shot order."""
+    init_asset_log(db_path)
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            "SELECT * FROM asset_log WHERE run_id = ? ORDER BY shot_index, id",
+            (run_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def license_manifest(run_id: str, db_path: Optional[str] = None) -> dict:
+    """
+    Builds the license manifest for a run and a completeness check.
+
+    Returns {"assets": [...], "complete": bool, "unlicensed": [...]} where
+    ``complete`` is True only if EVERY asset has a non-empty license.
+    """
+    assets = get_assets(run_id, db_path=db_path)
+    unlicensed = [a for a in assets if not (a.get("license") or "").strip()]
+    return {
+        "assets": assets,
+        "complete": len(assets) > 0 and not unlicensed,
+        "unlicensed": unlicensed,
+    }

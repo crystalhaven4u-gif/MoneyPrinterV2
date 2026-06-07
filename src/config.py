@@ -555,3 +555,64 @@ def get_script_target_minutes() -> int:
         return int(_get_script_config().get("target_minutes", 10))
     except (TypeError, ValueError):
         return 10
+
+def get_ffmpeg_path() -> str:
+    """
+    Path to the ffmpeg binary for the production layer.
+
+    Prefers config.json ffmpeg_path, then the FFMPEG_PATH env var, then bare
+    "ffmpeg" (resolved on PATH by the caller).
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        value = json.load(file).get("ffmpeg_path", "")
+    return str(value or os.environ.get("FFMPEG_PATH", "") or "ffmpeg").strip()
+
+def _get_tts_config() -> dict:
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        raw = json.load(file).get("tts", {})
+    return raw if isinstance(raw, dict) else {}
+
+def get_tts_config() -> dict:
+    """
+    Resolved TTS config for the production layer.
+
+    provider is 'edge_tts' (free, no key — default) or 'elevenlabs' (needs a key
+    from the env var named by elevenlabs.api_key_env). voice is provider-specific.
+    """
+    raw = _get_tts_config()
+    eleven = raw.get("elevenlabs") or {}
+    api_key_env = str(eleven.get("api_key_env", "ELEVENLABS_API_KEY") or "ELEVENLABS_API_KEY").strip()
+    return {
+        "provider": str(raw.get("provider", "edge_tts") or "edge_tts").strip(),
+        "voice": str(raw.get("voice", "en-US-GuyNeural") or "en-US-GuyNeural").strip(),
+        "elevenlabs": {
+            "api_key_env": api_key_env,
+            "api_key": os.environ.get(api_key_env, "").strip()
+            or str(eleven.get("api_key", "") or "").strip(),
+            "voice_id": str(eleven.get("voice_id", "") or "").strip(),
+        },
+    }
+
+def _get_footage_config() -> dict:
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        raw = json.load(file).get("footage", {})
+    return raw if isinstance(raw, dict) else {}
+
+def get_footage_config() -> dict:
+    """
+    Resolved footage-sourcer config. Stock-API keys are read from env vars named
+    by *_api_key_env (keyless sources need nothing). music_dir holds local
+    royalty-free beds.
+    """
+    raw = _get_footage_config()
+    pexels_env = str(raw.get("pexels_api_key_env", "PEXELS_API_KEY") or "PEXELS_API_KEY").strip()
+    pixabay_env = str(raw.get("pixabay_api_key_env", "PIXABAY_API_KEY") or "PIXABAY_API_KEY").strip()
+    return {
+        "pexels_api_key_env": pexels_env,
+        "pexels_api_key": os.environ.get(pexels_env, "").strip()
+        or str(raw.get("pexels_api_key", "") or "").strip(),
+        "pixabay_api_key_env": pixabay_env,
+        "pixabay_api_key": os.environ.get(pixabay_env, "").strip()
+        or str(raw.get("pixabay_api_key", "") or "").strip(),
+        "music_dir": str(raw.get("music_dir", "assets/music") or "assets/music").strip(),
+    }
