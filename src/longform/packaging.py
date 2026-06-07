@@ -16,6 +16,7 @@ Nothing here publishes -- it only stages a human review item.
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -31,8 +32,14 @@ THUMB_SIZE = (1280, 720)
 # Titles
 # --------------------------------------------------------------------------- #
 def _display_topic(topic: str) -> str:
-    """Title-cases a topic unless it already carries deliberate capitals."""
+    """
+    Normalizes a topic for use inside templates that supply their own article.
+
+    Strips a leading "The/A/An" so "The Backrooms" -> "Backrooms" (avoiding
+    "The The Backrooms Iceberg"), and title-cases an all-lowercase topic.
+    """
     topic = (topic or "").strip()
+    topic = re.sub(r"^(the|a|an)\s+", "", topic, flags=re.IGNORECASE)
     if topic and topic == topic.lower():
         return topic.title()
     return topic

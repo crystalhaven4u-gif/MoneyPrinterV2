@@ -385,6 +385,15 @@ class TitleAndConceptTests(unittest.TestCase):
         for t in titles:
             self.assertIn("Internet Mysteries", t["title"])
 
+    def test_leading_article_not_doubled(self):
+        titles = packaging.build_title_variants("The Backrooms", entry_count=8)
+        self.assertEqual(titles[0]["title"], "The Backrooms Iceberg Explained")
+        for t in titles:
+            self.assertNotIn("The The", t["title"])
+        concepts = packaging.build_thumbnail_concepts("The Backrooms")
+        self.assertIn("BACKROOMS", concepts[0]["overlay_text"])
+        self.assertNotIn("THE THE", concepts[0]["overlay_text"])
+
     def test_specific_number_is_odd(self):
         titles = packaging.build_title_variants("x", entry_count=8)
         num_title = [t for t in titles if t["formula"] == "specific_number"][0]["title"]

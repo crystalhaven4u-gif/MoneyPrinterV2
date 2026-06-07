@@ -154,10 +154,13 @@ def parse_entry(text: str) -> dict:
     narration = str(data.get("narration", "")).strip()
     if not narration:
         raise ValueError("entry has no narration")
+    open_loop = str(data.get("open_loop", "")).strip()
+    if open_loop.lower() == "open_loop":  # model echoed the schema key, not a value
+        open_loop = ""
     return {
         "narration": narration,
         "shot_list": _coerce_shot_list(data.get("shot_list")),
-        "open_loop": str(data.get("open_loop", "")).strip(),
+        "open_loop": open_loop,
     }
 
 

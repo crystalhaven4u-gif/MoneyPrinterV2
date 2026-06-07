@@ -146,7 +146,13 @@ def select_best(scored: list) -> dict:
 # --------------------------------------------------------------------------- #
 # Prompts
 # --------------------------------------------------------------------------- #
+def _bare_topic(topic: str) -> str:
+    """Strips a leading article so "the {topic} iceberg" reads naturally."""
+    return re.sub(r"^(the|a|an)\s+", "", (topic or "").strip(), flags=re.IGNORECASE)
+
+
 def _hooks_prompt(topic: str, n: int) -> str:
+    topic = _bare_topic(topic)
     return (
         f"You write cold opens for long-form 'iceberg' YouTube deep-dives.\n"
         f"Topic: the {topic} iceberg.\n\n"
@@ -158,6 +164,7 @@ def _hooks_prompt(topic: str, n: int) -> str:
 
 
 def _score_prompt(topic: str, hook: str) -> str:
+    topic = _bare_topic(topic)
     return (
         f"Rate this cold-open hook for a '{topic} iceberg' deep-dive on three "
         f"axes, each 0-10:\n"
