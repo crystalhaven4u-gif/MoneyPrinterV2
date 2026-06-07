@@ -74,6 +74,7 @@
   "footage": {
     "pexels_api_key_env": "PEXELS_API_KEY",
     "pixabay_api_key_env": "PIXABAY_API_KEY",
-    "music_dir": "assets/music"
+    "music_dir": "assets/music",
+    "music_mood": "dark ambient"
   }
 }

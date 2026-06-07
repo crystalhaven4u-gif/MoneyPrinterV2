@@ -615,4 +615,5 @@ def get_footage_config() -> dict:
         "pixabay_api_key": os.environ.get(pixabay_env, "").strip()
         or str(raw.get("pixabay_api_key", "") or "").strip(),
         "music_dir": str(raw.get("music_dir", "assets/music") or "assets/music").strip(),
+        "music_mood": str(raw.get("music_mood", "dark ambient") or "dark ambient").strip(),
     }
