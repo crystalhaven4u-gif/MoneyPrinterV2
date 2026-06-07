@@ -9,4 +9,5 @@ niche.txt
 auto.sh
 .DS_Store
 topics.longform.json
-review_queue/assets/music/
+review_queue/
+assets/music/
