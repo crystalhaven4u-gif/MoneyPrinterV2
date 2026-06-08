@@ -9,7 +9,7 @@ SRC_DIR = os.path.join(ROOT_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from longform import compose, music, sourcer, storage, tts
+from longform import compose, music, sourcer, storage, thumbnail, tts
 
 
 def _touch(path, data=b"x"):
@@ -112,6 +112,155 @@ class SourcerTests(unittest.TestCase):
         self.assertEqual(asset["source"], "slate")
         self.assertTrue(asset["license"])
         self.assertTrue(os.path.exists(asset["path"]))
+
+
+# --------------------------------------------------------------------------- #
+# Relevance ranking + AI-primary / placeholder-fallthrough sourcing
+# --------------------------------------------------------------------------- #
+class RelevanceRankerTests(unittest.TestCase):
+    def _cands(self):
+        return [
+            {"source": "pixabay", "source_id": "a", "kind": "video",
+             "download_url": "u/a", "license": "Pixabay License", "description": "city traffic day"},
+            {"source": "pixabay", "source_id": "b", "kind": "video",
+             "download_url": "u/b", "license": "Pixabay License", "description": "dark empty liminal hallway"},
+        ]
+
+    def test_rank_orders_best_first_and_reports_best_score(self):
+        # ranker likes candidate index 1 (the liminal hallway) far more.
+        def ranker(intent, descriptions):
+            return [2.0, 9.0]
+
+        ordered, best = sourcer.rank_candidates("eerie liminal hallway", self._cands(), ranker)
+        self.assertEqual(ordered[0]["source_id"], "b")
+        self.assertEqual(best, 9.0)
+
+    def test_no_ranker_keeps_provider_order(self):
+        ordered, best = sourcer.rank_candidates("x", self._cands(), None)
+        self.assertEqual([c["source_id"] for c in ordered], ["a", "b"])
+        self.assertIsNone(best)
+
+    def test_make_relevance_ranker_parses_llm_scores(self):
+        def fake_llm(prompt):
+            return '[{"index": 0, "score": 3}, {"index": 1, "score": 8}]'
+
+        ranker = sourcer.make_relevance_ranker(fake_llm)
+        self.assertEqual(ranker("intent", ["d0", "d1"]), [3.0, 8.0])
+
+    def test_make_relevance_ranker_nonblocking_on_error(self):
+        def boom(prompt):
+            raise RuntimeError("down")
+
+        ranker = sourcer.make_relevance_ranker(boom)
+        self.assertEqual(ranker("intent", ["d0", "d1"]), [])
+
+    def test_source_shot_picks_best_ranked_candidate(self):
+        def provider(shot, cfg, session):
+            return [
+                {"source": "pixabay", "source_id": "lowmatch", "kind": "video",
+                 "download_url": "u/low", "license": "Pixabay License", "description": "sunny beach"},
+                {"source": "pixabay", "source_id": "bestmatch", "kind": "video",
+                 "download_url": "u/best", "license": "Pixabay License", "description": "dark hallway"},
+            ]
+
+        ranker = lambda intent, descs: [1.0, 9.0]  # second is the winner
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "farm.db")
+            with patch.object(sourcer, "download", side_effect=lambda url, dest, session=None: _touch(dest)), \
+                 patch.object(sourcer, "perceptual_hash", side_effect=lambda *a, **k: object()):
+                asset = sourcer.source_shot(
+                    "hallway", 0, "S", "run-rank", tmp, providers=[provider],
+                    used_hashes=set(), ranker=ranker, db_path=db,
+                )
+        self.assertEqual(asset["source_id"], "bestmatch")
+
+    def test_generic_mismatch_falls_through_to_ai(self):
+        def provider(shot, cfg, session):
+            return [{"source": "pixabay", "source_id": "generic", "kind": "video",
+                     "download_url": "u/g", "license": "Pixabay License", "description": "random stock"}]
+
+        ranker = lambda intent, descs: [1.0]  # below MIN_RELEVANCE -> reject
+
+        class _Img:
+            is_placeholder = False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "farm.db")
+            ai_file = _touch(os.path.join(tmp, "ai.png"))
+            _Img.path = ai_file
+            with patch.object(sourcer, "download", side_effect=lambda url, dest, session=None: _touch(dest)), \
+                 patch.object(sourcer, "perceptual_hash", side_effect=lambda *a, **k: object()):
+                asset = sourcer.source_shot(
+                    "hallway", 0, "S", "run-gen", tmp, providers=[provider],
+                    used_hashes=set(), ranker=ranker,
+                    image_fallback_fn=lambda prompt, out: _Img(), db_path=db,
+                )
+        self.assertEqual(asset["source"], "ai_generated")
+
+    def test_ai_placeholder_falls_through_to_stock(self):
+        # prefer_ai, but AI returns a flagged placeholder -> must use stock, not slate.
+        def provider(shot, cfg, session):
+            return [{"source": "pixabay", "source_id": "real", "kind": "video",
+                     "download_url": "u/r", "license": "Pixabay License", "description": "dark hallway"}]
+
+        class _Placeholder:
+            path = None
+            is_placeholder = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "farm.db")
+            with patch.object(sourcer, "download", side_effect=lambda url, dest, session=None: _touch(dest)), \
+                 patch.object(sourcer, "perceptual_hash", side_effect=lambda *a, **k: object()):
+                asset = sourcer.source_shot(
+                    "hallway", 0, "S", "run-ph", tmp, providers=[provider],
+                    used_hashes=set(), prefer_ai=True,
+                    image_fallback_fn=lambda prompt, out: _Placeholder(), db_path=db,
+                )
+        self.assertEqual(asset["source"], "pixabay")  # not slate
+
+
+# --------------------------------------------------------------------------- #
+# Iceberg thumbnail generator
+# --------------------------------------------------------------------------- #
+class IcebergThumbnailTests(unittest.TestCase):
+    def test_uses_ai_base_when_not_placeholder(self):
+        class _Img:
+            is_placeholder = False
+
+        def fake_gen(**kwargs):
+            _Img.path = _touch(kwargs["output_path"])
+            return _Img()
+
+        called = {"procedural": 0}
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(thumbnail, "procedural_base",
+                              side_effect=lambda *a, **k: called.__setitem__("procedural", called["procedural"] + 1)):
+                base = thumbnail.generate_base(
+                    "X", thumbnail.VARIANTS[0], os.path.join(tmp, "b.png"), "magick",
+                    generate_image_fn=fake_gen,
+                )
+        self.assertEqual(base["source"], "ai_generated")
+        self.assertEqual(called["procedural"], 0)  # AI worked -> no procedural draw
+
+    def test_falls_back_to_procedural_on_placeholder(self):
+        class _Img:
+            path = None
+            is_placeholder = True
+
+        def fake_gen(**kwargs):
+            return _Img()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "b.png")
+            with patch.object(thumbnail, "procedural_base",
+                              side_effect=lambda out, magick, palette: _touch(out)):
+                base = thumbnail.generate_base(
+                    "X", thumbnail.VARIANTS[0], target, "magick", generate_image_fn=fake_gen,
+                )
+        self.assertEqual(base["source"], "procedural")
+
+    def test_title_lines_strip_leading_the(self):
+        self.assertEqual(thumbnail._title_lines("The Backrooms"), "THE BACKROOMS\nICEBERG")
 
 
 # --------------------------------------------------------------------------- #

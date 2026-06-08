@@ -187,6 +187,95 @@ class LengthEnforcementTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+# Pass 2 -- narrative rewrite (facts preserved, voice changed)
+# --------------------------------------------------------------------------- #
+class TwoPassNarrativeTests(unittest.TestCase):
+    OUTLINE = json.dumps({
+        "cold_hook": "Welcome to the Roman Empire iceberg.",
+        "tiers": [
+            {"tier": 1, "label": "Surface", "entry_title": "Aqueducts", "premise": "p1", "open_loop": "o1"},
+            {"tier": 2, "label": "Abyss", "entry_title": "Damnatio Memoriae", "premise": "p2", "open_loop": "o2"},
+        ],
+        "final_payoff": "And that was the bottom.",
+    })
+    ENTRY = json.dumps({
+        "narration": "The aqueducts were built in 312 BC. " + _narration(150),
+        "shot_list": [{"description": "stone aqueduct", "query": "ancient roman aqueduct misty", "mood": "awe", "type": "concrete"}],
+        "open_loop": "deeper",
+    })
+
+    def _fake_llm(self):
+        def llm(prompt):
+            if "Build the OUTLINE" in prompt:
+                return self.OUTLINE
+            if "SOURCE COLD OPEN" in prompt:
+                return json.dumps({"narration": "Imagine standing beneath stone older than your nation."})
+            if "SOURCE NARRATION" in prompt:
+                # Re-voiced but PRESERVES the 312 BC fact carried in the source.
+                return json.dumps({"narration": "You think you know Rome. The aqueducts were built in 312 BC, and what they hid runs deeper."})
+            if "SOURCE FINAL PAYOFF" in prompt:
+                return json.dumps({"narration": "This is the bottom. And you can never unsee it."})
+            return self.ENTRY
+        return llm
+
+    def test_rewrite_changes_voice_and_keeps_factual(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "farm.db")
+            result = script.generate_script(
+                "Roman Empire", llm=self._fake_llm(), target_minutes=2, db_path=db,
+                run_id="run-2pass", grounding=False, narrative=True,
+            )
+        self.assertTrue(result["narrative_pass"])
+        # cold open re-voiced, no "Welcome to ...", factual original retained.
+        self.assertNotIn("Welcome to", result["cold_hook"])
+        self.assertEqual(result["factual_cold_hook"], "Welcome to the Roman Empire iceberg.")
+        tier = result["tiers"][0]
+        self.assertIn("312 BC", tier["narration"])          # fact preserved
+        self.assertIn("You", tier["narration"])             # direct address (re-voiced)
+        self.assertIn("312 BC", tier["factual_narration"])  # Pass 1 kept for trace
+        self.assertNotEqual(tier["narration"], tier["factual_narration"])
+
+    def test_narrative_disabled_keeps_factual_voice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "farm.db")
+            result = script.generate_script(
+                "Roman Empire", llm=self._fake_llm(), target_minutes=2, db_path=db,
+                run_id="run-nopass", grounding=False, narrative=False,
+            )
+        self.assertFalse(result["narrative_pass"])
+        self.assertEqual(result["cold_hook"], "Welcome to the Roman Empire iceberg.")
+        self.assertNotIn("factual_cold_hook", result)
+
+    def test_rewrite_failure_falls_back_to_factual(self):
+        # narrative_rewrite must never lose Pass 1 content when a rewrite errors.
+        sc = {
+            "iceberg_topic": "X", "cold_hook": "factual hook",
+            "tiers": [{"tier": 1, "label": "S", "entry_title": "E", "narration": "factual body", "open_loop": "o"}],
+            "final_payoff": "factual end",
+        }
+
+        def boom(prompt):
+            raise RuntimeError("llm down")
+
+        out = script.narrative_rewrite(sc, boom, prompt_cfg={})
+        self.assertEqual(out["cold_hook"], "factual hook")
+        self.assertEqual(out["tiers"][0]["narration"], "factual body")
+        self.assertEqual(out["final_payoff"], "factual end")
+
+    def test_parse_rewrite_accepts_json_and_prose(self):
+        self.assertEqual(script.parse_rewrite('{"narration": "hi there"}'), "hi there")
+        self.assertEqual(script.parse_rewrite("just prose, no json"), "just prose, no json")
+        with self.assertRaises(ValueError):
+            script.parse_rewrite("   ")
+
+    def test_shots_carry_query_and_type(self):
+        entry = script.parse_entry(self.ENTRY)
+        self.assertEqual(entry["shots"][0]["query"], "ancient roman aqueduct misty")
+        self.assertEqual(entry["shots"][0]["type"], "concrete")
+        self.assertEqual(entry["shot_list"], ["stone aqueduct"])
+
+
+# --------------------------------------------------------------------------- #
 # Grounding (research) fallback
 # --------------------------------------------------------------------------- #
 class GroundingTests(unittest.TestCase):

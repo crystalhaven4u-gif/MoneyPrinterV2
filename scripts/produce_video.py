@@ -27,7 +27,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 import requests
 
-from longform import compose, image_providers, llm as llm_module, music, sourcer, storage, tts
+from longform import compose, image_providers, llm as llm_module, music, sourcer, storage, thumbnail, tts
 
 
 def main(argv=None) -> int:
@@ -112,6 +112,17 @@ def main(argv=None) -> int:
         db_path=None,
     )
 
+    # Real iceberg thumbnails (3 variants) -- AI base when reachable, else a
+    # procedural ImageMagick iceberg so they're never gray placeholders.
+    tier_labels = [t.get("label", "") for t in (script.get("tiers") or [])]
+    thumbnails = []
+    try:
+        thumbnails = thumbnail.render_iceberg_thumbnails(
+            topic, item_dir, magick_path, tier_labels=tier_labels, session=session,
+        )
+    except Exception as exc:
+        print(f"thumbnail render skipped: {exc}")
+
     # Metadata sidecar
     manifest = storage.license_manifest(run_id)
     metadata = {
@@ -123,6 +134,7 @@ def main(argv=None) -> int:
         "credits": report["credits"],
         "license_manifest_complete": manifest["complete"],
         "unlicensed_assets": manifest["unlicensed"],
+        "iceberg_thumbnails": thumbnails,
         "counts": {
             "real_clips": report["real_clips"],
             "ai_fallbacks": report["ai_fallbacks"],
@@ -154,6 +166,10 @@ def main(argv=None) -> int:
     else:
         print("music track     : (none fetched; local bed or silence)")
     print(f"credits         : {report['credits'] or '(none required)'}")
+    if thumbnails:
+        print("iceberg thumbs  :")
+        for thumb in thumbnails:
+            print(f"   - {thumb['variant_id']:18} base={thumb['base_source']:12} {thumb['path']}")
     print(f"\nCHAPTERS:\n{report['chapters_text']}")
     print(f"\nmetadata sidecar: {meta_path}")
     return 0
