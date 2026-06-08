@@ -31,7 +31,7 @@ from typing import Callable, Optional
 
 import yaml
 
-from . import research, storage
+from . import factcheck, research, storage
 
 _ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -311,8 +311,12 @@ def build_entry_prompt(topic, tier, word_budget, running_context, fact, prompt_c
         f"Write the NARRATION for ONE tier of the '{topic}' iceberg video.\n\n"
         f"TIER: {tier['label']} — {tier['entry_title']}\n"
         f"PREMISE: {tier.get('premise', '')}\n"
-        f"GROUND-TRUTH FACTS (rely on these; do not contradict them; do not "
-        f"fabricate names/dates/numbers beyond established knowledge):\n{fact_block}\n\n"
+        f"SOURCE TEXT (the ONLY place specific facts may come from):\n{fact_block}\n\n"
+        f"FACT DISCIPLINE (critical): state a specific date, year, number, proper "
+        f"name, or attribution ONLY if it appears in the SOURCE TEXT above. If the "
+        f"source does not support a specific, speak generally instead "
+        f"(\"reportedly\", \"some accounts claim\", \"a user\", \"years later\") — "
+        f"NEVER invent a date, name, or number. Do not contradict the source.\n\n"
         f"CONTEXT SO FAR (continue smoothly; pick up the thread it teases):\n"
         f"{context_block}\n\n"
         f"Write about {word_budget} words of vivid, FACTUAL documentary narration "
@@ -337,12 +341,13 @@ def build_expand_prompt(topic, tier, narration, deficit_words, fact) -> str:
     fact_block = fact.strip() if fact else "(use only established knowledge; do NOT invent specifics)"
     return (
         f"This tier of the '{topic}' iceberg is TOO SHORT. Expand it by about "
-        f"{deficit_words} more words of CONCRETE, specific detail — mechanisms, "
-        f"consequences, vivid imagery, established names/dates — NOT filler, "
-        f"repetition, or padding. Keep it factual and on-topic, preserve the "
-        f"ending open_loop.\n\n"
+        f"{deficit_words} more words of CONCRETE detail — mechanisms, consequences, "
+        f"vivid imagery — NOT filler, repetition, or padding. State a specific "
+        f"date/name/number ONLY if it appears in the SOURCE TEXT below; otherwise "
+        f"stay general (\"reportedly\", \"some accounts\") — never invent specifics. "
+        f"Keep it factual and on-topic, preserve the ending open_loop.\n\n"
         f"TIER: {tier['label']} — {tier['entry_title']}\n"
-        f"FACTS:\n{fact_block}\n\n"
+        f"SOURCE TEXT:\n{fact_block}\n\n"
         f"CURRENT NARRATION:\n{narration}\n\n"
         f"Return ONLY JSON (the FULL expanded version): {{\"narration\": str, "
         f"\"shot_list\": [str], \"open_loop\": str}}"
@@ -463,6 +468,58 @@ def _rewrite(llm, prompt, fallback) -> str:
     return out or fallback
 
 
+def build_entity_relock_prompt(topic, label, text, terms) -> str:
+    """Re-prompts a re-voiced section to remove specifics it INVENTED (not in
+    Pass 1): people, dates, numbers, framing characters."""
+    listed = ", ".join(f'"{t}"' for t in terms)
+    return (
+        f"While restyling this section of a '{topic}' iceberg script, you "
+        f"INTRODUCED specifics that are NOT in the source and must be removed: "
+        f"{listed}.\n\n"
+        f"Rewrite the section KEEPING the same ominous, second-person style but "
+        f"using ONLY the facts already present. Remove every listed item: replace "
+        f"any invented person/witness/framing character with direct second-person "
+        f"address ('you'), and replace any invented date/number/name with general "
+        f"phrasing ('reportedly', 'years later', 'some accounts'). Add NO other new "
+        f"specifics.\n\n"
+        f"SECTION ({label}):\n{text}\n\n"
+        f"Return ONLY JSON: {{\"narration\": str}}"
+    )
+
+
+def _locked_rewrite(llm, prompt, fallback, allowed, label, topic, report) -> str:
+    """Rewrites a section, then ENFORCES the entity lock: any specific not allowed
+    by Pass 1 is re-prompted away (cap 2 retries), then hard-stripped or, as a
+    last resort, replaced with the factual text. Records the outcome in
+    ``report``. Guarantees the returned text adds no new specifics vs Pass 1.
+    """
+    text = _rewrite(llm, prompt, fallback)
+    initial = factcheck.new_specifics(allowed, text)["all"]
+    violations = list(initial)
+    retries = 0
+    while violations and retries < 2:
+        text = _rewrite(llm, build_entity_relock_prompt(topic, label, text, violations), text)
+        violations = factcheck.new_specifics(allowed, text)["all"]
+        retries += 1
+
+    removed, fell_back = [], False
+    if violations:  # residual after retries -> hard strip, else fall back
+        stripped = factcheck.strip_sentences_with(text, violations)
+        floor = max(8, int(0.4 * len(fallback.split())))
+        if len(stripped.split()) < floor:
+            text, fell_back = fallback, True
+        else:
+            text = stripped
+        removed = violations
+
+    final = factcheck.new_specifics(allowed, text)["all"]
+    report.append({
+        "section": label, "invented_initial": initial, "retries": retries,
+        "removed": removed, "fell_back": fell_back, "residual": final,
+    })
+    return text
+
+
 def narrative_rewrite(script: dict, llm, prompt_cfg: dict, style_spec: Optional[dict] = None) -> dict:
     """Re-voices a factual script (Pass 1) into cinematic narration (Pass 2).
 
@@ -489,30 +546,48 @@ def narrative_rewrite(script: dict, llm, prompt_cfg: dict, style_spec: Optional[
     deepest_title = tiers[-1]["entry_title"] if tiers else topic
     first_title = tiers[0]["entry_title"] if tiers else ""
 
+    # ENTITY LOCK: everything Pass 1 already established (its full text + the
+    # tier titles + the topic). Pass 2 may not introduce any specific beyond it.
     factual_cold = script.get("cold_hook", "")
+    factual_payoff = script.get("final_payoff", "")
+    allowed = factcheck.allowed_specifics(
+        topic, factual_cold, factual_payoff,
+        *[t.get("narration", "") for t in tiers],
+        *[t.get("entry_title", "") for t in tiers],
+        *[t.get("open_loop", "") for t in tiers],
+    )
+    lock_report = []
+
     script["factual_cold_hook"] = factual_cold
-    script["cold_hook"] = _rewrite(
-        llm, build_cold_open_rewrite_prompt(topic, factual_cold, first_title, prompt_cfg, style_block), factual_cold
+    script["cold_hook"] = _locked_rewrite(
+        llm, build_cold_open_rewrite_prompt(topic, factual_cold, first_title, prompt_cfg, style_block),
+        factual_cold, allowed, "cold_open", topic, lock_report,
     )
 
     for position, tier in enumerate(tiers, start=1):
         factual = tier.get("narration", "")
         tier["factual_narration"] = factual
-        tier["narration"] = _rewrite(
+        tier["narration"] = _locked_rewrite(
             llm,
             build_tier_rewrite_prompt(
                 topic, tier.get("label", ""), tier.get("entry_title", ""),
                 position, total, factual, tier.get("open_loop", ""), prompt_cfg, style_block,
             ),
-            factual,
+            factual, allowed, f"tier_{position}:{tier.get('entry_title','')}", topic, lock_report,
         )
 
-    factual_payoff = script.get("final_payoff", "")
     script["factual_payoff"] = factual_payoff
-    script["final_payoff"] = _rewrite(
-        llm, build_payoff_rewrite_prompt(topic, factual_payoff, deepest_title, prompt_cfg, style_block), factual_payoff
+    script["final_payoff"] = _locked_rewrite(
+        llm, build_payoff_rewrite_prompt(topic, factual_payoff, deepest_title, prompt_cfg, style_block),
+        factual_payoff, allowed, "final_payoff", topic, lock_report,
     )
 
+    residual_total = sum(len(r["residual"]) for r in lock_report)
+    script["pass2_entity_lock"] = {
+        "sections": lock_report,
+        "new_entities_final": residual_total,
+        "clean": residual_total == 0,
+    }
     script["word_count"] = _word_count(
         script["cold_hook"], script["final_payoff"], *[t["narration"] for t in tiers]
     )
@@ -539,24 +614,36 @@ def _closing_beat(narration: str) -> str:
     return " ".join(sentences[-2:]).strip() if sentences else narration[-240:]
 
 
-def _match_fact(entry_title: str, pool: list) -> str:
-    """Best-matching grounded fact for an entry title (substring overlap)."""
+def _match_entry(entry_title: str, pool: list):
+    """Best-matching grounded entry for a tier title (substring then token
+    overlap), or None. Used for both the Pass-1 source block and verification."""
     title = (entry_title or "").lower()
     if not title:
-        return ""
+        return None
     for entry in pool:
         name = (entry.get("title") or "").lower()
         if name and (name in title or title in name):
-            return entry.get("fact", "")
-    # token-overlap fallback
+            return entry
     title_tokens = set(re.findall(r"\w+", title))
-    best, best_overlap = "", 0
+    best, best_overlap = None, 0
     for entry in pool:
         tokens = set(re.findall(r"\w+", (entry.get("title") or "").lower()))
         overlap = len(title_tokens & tokens)
         if overlap > best_overlap:
-            best, best_overlap = entry.get("fact", ""), overlap
-    return best if best_overlap >= 2 else ""
+            best, best_overlap = entry, overlap
+    return best if best_overlap >= 2 else None
+
+
+def _entry_source_text(entry) -> str:
+    """The richest source text available on a matched entry."""
+    if not entry:
+        return ""
+    return (entry.get("source_text") or entry.get("fact") or "").strip()
+
+
+def _match_fact(entry_title: str, pool: list) -> str:
+    """Best-matching grounded source text for an entry title (or "")."""
+    return _entry_source_text(_match_entry(entry_title, pool))
 
 
 def generate_entry(
@@ -621,6 +708,7 @@ def generate_script(
     narrative: Optional[bool] = None,
     style_spec: Optional[dict] = None,
     niche: str = "iceberg_deepdive",
+    enrich: Optional[bool] = None,
     log: bool = True,
 ) -> dict:
     """
@@ -663,6 +751,16 @@ def generate_script(
         result = research.gather_entries(topic, searcher=searcher, llm=llm)
         pool, sources = result["entries"], result["sources"]
         rejected_sources = result.get("rejected", [])
+        # Pull FULLER source extracts so Pass 1 has real text to ground specifics
+        # against (and verification has something to check). Default: only on a
+        # real run (skipped when a searcher is injected, e.g. tests) to stay
+        # offline; force with enrich=True/False.
+        do_enrich = enrich if enrich is not None else (searcher is None)
+        if do_enrich and pool:
+            try:
+                research.enrich_with_source_text(pool)
+            except Exception:
+                pass
 
     few_shot = get_few_shot_winners(db_path=db_path, limit=few_shot_n)
     n_tiers = max(5, min(9, round(target_minutes * 0.8)))
@@ -676,9 +774,12 @@ def generate_script(
     # b) + c) PER-ENTRY with running context + length enforcement
     tiers = []
     per_entry_word_counts = []
+    tier_sources = []  # per-tier source text, for the verification pass
     running_context = outline["cold_hook"]
     for plan in tiers_plan:
-        fact = _match_fact(plan["entry_title"], pool)
+        matched = _match_entry(plan["entry_title"], pool)
+        fact = _entry_source_text(matched)
+        tier_sources.append(" ".join([fact, plan.get("entry_title", ""), topic]).strip())
         try:
             entry = generate_entry(
                 topic, plan, per_entry_budget, running_context, fact, prompt_cfg, llm
@@ -764,6 +865,37 @@ def generate_script(
         if style_spec and style_spec.get("chapter_style"):
             script["chapter_style"] = style_spec["chapter_style"]
     word_count = script["word_count"]
+
+    # f) VERIFICATION -> factual-confidence report for the human reviewer. Every
+    # specific (date / number / proper noun) in the SHIPPED narration is checked
+    # against that entry's source text; unsupported specifics are flagged so the
+    # reviewer knows exactly what to verify before approving.
+    corpus = " ".join(tier_sources) + " " + topic
+    flagged, checked, supported = [], 0, 0
+
+    def _account(section_label, narration, source_text):
+        nonlocal checked, supported
+        result = factcheck.verify_claims(narration or "", source_text or "")
+        checked += result["checked"]
+        supported += result["supported"]
+        for item in result["flagged"]:
+            flagged.append({"section": section_label, **item})
+
+    _account("cold_open", script.get("cold_hook", ""), corpus)
+    for index, tier in enumerate(script.get("tiers", [])):
+        source = tier_sources[index] if index < len(tier_sources) else corpus
+        _account(f"tier_{index + 1}:{tier.get('entry_title','')}", tier.get("narration", ""), source)
+    _account("final_payoff", script.get("final_payoff", ""), corpus)
+
+    script["factual_confidence"] = {
+        "checked": checked,
+        "supported": supported,
+        "score": round(supported / checked, 3) if checked else 1.0,
+        "flagged": flagged,
+        "note": ("Each flagged item is a specific (date/name/number) not found in "
+                 "the entry's grounding source -- verify before publishing. "
+                 "Grounding may be partial, so some flags are false positives."),
+    }
 
     if log:
         storage.log_creative_run(

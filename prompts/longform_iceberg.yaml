@@ -23,7 +23,14 @@
 # built-in fallback when no spec is cached. Facts still come ONLY from our own
 # Wikipedia grounding; exemplar wording/facts are never reproduced (legal guard
 # in style_spec.find_leak + sanitize_spec).
-version: iceberg-v4
+#
+# v5: ACCURACY HARDENING. Pass 1 gets fact discipline (state a specific date/
+# name/number ONLY when the fuller source extract supports it, else hedge) and a
+# verification pass that flags unsupported specifics into a factual-confidence
+# report in the review item. Pass 2 gets an ENTITY LOCK (src/longform/factcheck.py)
+# -- it may only restyle Pass 1 and may introduce NO new proper noun, date,
+# number, or framing character; violations are re-prompted away then stripped.
+version: iceberg-v5
 
 # Narration pace used to convert production.target_minutes -> a word budget.
 target_wpm: 140
