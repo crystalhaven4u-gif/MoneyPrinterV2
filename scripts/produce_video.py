@@ -10,6 +10,10 @@ review_queue/pending/<run_id>/package.json, sources commercial-safe footage
 (logging every license to the ledger), and writes the final MP4 + metadata
 (chapters, license manifest, credits) back into that review item. Nothing
 publishes.
+
+A per-run PID lockfile (.mp/locks/produce_<run_id>.lock) prevents two concurrent
+renders of the same run_id from double-writing the asset ledger; a lock whose
+owner process is dead is reclaimed as stale.
 """
 
 import json
@@ -29,6 +33,76 @@ import requests
 
 from longform import compose, image_providers, llm as llm_module, music, sourcer, storage, thumbnail, tts
 
+LOCK_DIR = os.path.join(ROOT_DIR, ".mp", "locks")
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether a PID is a currently-running process (cross-platform)."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+            return code.value == STILL_ACTIVE
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+class _RunLock:
+    """A per-run PID lockfile so two concurrent renders can't double-write the
+    asset ledger for the same run_id. A lock whose owner PID is dead is treated
+    as stale and taken over."""
+
+    def __init__(self, run_id: str):
+        self.path = os.path.join(LOCK_DIR, f"produce_{run_id}.lock")
+        self.acquired = False
+
+    def acquire(self) -> bool:
+        os.makedirs(LOCK_DIR, exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                try:
+                    os.write(fd, str(os.getpid()).encode())
+                finally:
+                    os.close(fd)
+                self.acquired = True
+                return True
+            except FileExistsError:
+                try:
+                    with open(self.path, "r", encoding="utf-8") as handle:
+                        owner = int((handle.read().strip() or "0"))
+                except (OSError, ValueError):
+                    owner = 0
+                if owner and owner != os.getpid() and _pid_alive(owner):
+                    return False  # held by a live render
+                try:  # stale lock -> remove and retry once
+                    os.remove(self.path)
+                except OSError:
+                    return False
+        return False
+
+    def release(self) -> None:
+        if self.acquired:
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+            self.acquired = False
+
 
 def main(argv=None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
@@ -46,6 +120,20 @@ def main(argv=None) -> int:
         package = json.load(handle)
     script = package.get("script") or package
 
+    # Run-lock: refuse to start if another render for this run_id is live, so two
+    # processes can't double-write the asset ledger (stale locks are reclaimed).
+    lock = _RunLock(run_id)
+    if not lock.acquire():
+        print(f"Another produce_video is already rendering '{run_id}'.")
+        print(f"Lock held: {lock.path}. Aborting to avoid double-writing the ledger.")
+        return 3
+    try:
+        return _render(run_id, item_dir, script)
+    finally:
+        lock.release()
+
+
+def _render(run_id, item_dir, script) -> int:
     # Config
     import config as cfg
     ffmpeg_path = cfg.get_ffmpeg_path()
