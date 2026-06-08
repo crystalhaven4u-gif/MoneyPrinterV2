@@ -207,6 +207,37 @@ Few-shot tone comes from the REAL top `iceberg_deepdive` winners in
 - This layer may use PyYAML + Pillow (render-side); the data farmer core
   (`youtube_api`, `farmer`, `storage`, `image_providers`) stays requests+stdlib.
 
+### Reference-exemplar layer (learned style) — exemplars / style_spec
+Instead of imitating generic "be dramatic" priors, the creative layer learns the
+genre's winning pattern from REAL top performers farmed into `.mp/farm.db`.
+- `src/longform/exemplars.py` — selects top videos for a niche by a blended rank
+  (views + view_velocity + outlier_score), runs the existing LLM relevance
+  filter FIRST so off-topic bleed is excluded, and enforces ANTI-OVERFIT by
+  sampling across many channels (per-channel cap, default 2). For each kept video
+  it fetches the transcript (free `youtube-transcript-api`), derives the opening
+  hook, rough structure, chapter markers (from the description via the Data API
+  when available), and pacing. Transcripts are cleaned of ASR noise. Fully
+  non-blocking: a video with no transcript is skipped and the next is pulled.
+- `src/longform/style_spec.py` — an LLM distills the cleaned exemplars into a
+  STRUCTURED per-niche style spec (hook formula, narrator tone, pacing, dread
+  build, tier transitions, words-per-entry, escalation, title patterns, chapter
+  style). Cached at `.mp/style_spec_<niche>.json`; rebuild with `refresh=True`.
+  A clearly-marked `rerank_by_retention()` hook lets the spec become
+  self-improving once the retention loop exists.
+- **LEGAL GUARDS (enforced in code, not just prose):** the spec stores ABSTRACT
+  patterns plus at most very short (<=15 word) illustrative snippets — NEVER full
+  transcripts (harvested transcripts are transient, never written to review
+  outputs). Generation must never reproduce exemplar wording or borrow their
+  facts; our facts come ONLY from our own Wikipedia grounding (`research.py`).
+  `style_spec.find_leak()` detects any long verbatim run (>=8 words) shared with
+  an exemplar; `sanitize_spec()` scrubs the spec before caching, and a test
+  asserts no exemplar substring can leak into a generated script.
+- INJECTION: the cached spec feeds Pass 2 of the two-pass script (learned hook
+  formula / pacing / transitions / escalation), `hooks.py` (hook formula),
+  `packaging.build_titles_with_spec` (title patterns), and is surfaced for
+  chapter naming. Only the CACHED spec is read during script generation (no live
+  harvest mid-run); build it separately. Prompt bumped to `iceberg-v4`.
+
 ### Production layer (script -> 1080p MP4) — tts / sourcer / compose
 Turns a finished script into a real 16:9 1080p MP4. **Requires ffmpeg** (set
 `ffmpeg_path` in config, or have it on PATH); `scripts/produce_video.py

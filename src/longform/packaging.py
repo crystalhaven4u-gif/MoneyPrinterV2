@@ -86,6 +86,38 @@ def build_title_variants(topic: str, entry_count: Optional[int] = None) -> list:
     ]
 
 
+def build_titles_with_spec(topic: str, entry_count: Optional[int] = None,
+                           style_spec: Optional[dict] = None) -> list:
+    """Title variants augmented with the learned style spec's title patterns.
+
+    Falls back to the proven built-in variants when no spec is supplied, so the
+    default behaviour (and its tests) are unchanged. Spec patterns may use a
+    ``{Topic}`` / ``{topic}`` placeholder and are filled with the display topic;
+    they are de-duplicated against the built-ins and capped so the list stays
+    review-friendly.
+    """
+    base = build_title_variants(topic, entry_count=entry_count)
+    patterns = (style_spec or {}).get("title_patterns") or []
+    if not patterns:
+        return base
+
+    name = _display_topic(topic)
+    learned, seen = [], {t["title"].lower() for t in base}
+    for pattern in patterns:
+        try:
+            title = str(pattern).replace("{Topic}", name).replace("{topic}", name).strip()
+        except Exception:
+            continue
+        if not title or "{" in title or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+        learned.append({"formula": "learned_pattern", "title": title})
+        if len(learned) >= 2:
+            break
+    # Learned patterns first (they reflect what actually performs), then proven.
+    return (learned + base)[:6]
+
+
 # --------------------------------------------------------------------------- #
 # Thumbnail concepts
 # --------------------------------------------------------------------------- #
@@ -414,14 +446,22 @@ def generate_iceberg_package(
     """
     from . import hooks as hooks_module
     from . import script as script_module
+    from . import style_spec as style_spec_module
+
+    # Learned per-niche style spec (cached; built separately). Non-blocking.
+    try:
+        spec = style_spec_module.load_cached("iceberg_deepdive")
+    except Exception:
+        spec = None
 
     script = script_module.generate_script(
-        topic, llm=llm, target_minutes=target_minutes, db_path=db_path, run_id=run_id
+        topic, llm=llm, target_minutes=target_minutes, db_path=db_path, run_id=run_id,
+        style_spec=spec,
     )
     hooks_result = hooks_module.run_hook_engine(
-        topic, llm=llm, n=n_hooks, db_path=db_path, run_id=run_id
+        topic, llm=llm, n=n_hooks, db_path=db_path, run_id=run_id, style_spec=spec,
     )
-    titles = build_title_variants(topic, entry_count=script["entry_count"])
+    titles = build_titles_with_spec(topic, entry_count=script["entry_count"], style_spec=spec)
     concepts = build_thumbnail_concepts(topic)
 
     summary = submit_to_review(

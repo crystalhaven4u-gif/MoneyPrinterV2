@@ -377,10 +377,21 @@ _PRESERVE = (
 )
 
 
-def build_cold_open_rewrite_prompt(topic, factual_cold_hook, first_tier_title, prompt_cfg) -> str:
+def _learned_section(style_block: str) -> str:
+    if not style_block:
+        return ""
+    return (
+        "LEARNED STYLE PATTERNS (distilled from real top-performing videos in "
+        "this genre -- ADOPT these patterns; never copy any exemplar's words or "
+        "facts):\n" + style_block + "\n\n"
+    )
+
+
+def build_cold_open_rewrite_prompt(topic, factual_cold_hook, first_tier_title, prompt_cfg, style_block="") -> str:
     return (
         f"You are an ominous documentary narrator opening a YouTube iceberg "
         f"deep-dive on '{topic}'.\n\n"
+        f"{_learned_section(style_block)}"
         f"Rewrite the COLD OPEN below into 3-5 spoken sentences that GRIP a viewer "
         f"in the first 10 seconds. The first 2-3 sentences must land a visceral "
         f"hook -- a disturbing question, a stake, or an unsettling image -- so the "
@@ -397,7 +408,7 @@ def build_cold_open_rewrite_prompt(topic, factual_cold_hook, first_tier_title, p
     )
 
 
-def build_tier_rewrite_prompt(topic, label, entry_title, position, total, factual, open_loop, prompt_cfg) -> str:
+def build_tier_rewrite_prompt(topic, label, entry_title, position, total, factual, open_loop, prompt_cfg, style_block="") -> str:
     depth = (
         "This is the FIRST tier -- unsettling but still recognizable."
         if position == 1 else
@@ -408,6 +419,7 @@ def build_tier_rewrite_prompt(topic, label, entry_title, position, total, factua
         f"You are an ominous documentary narrator descending the '{topic}' "
         f"iceberg. Rewrite ONE tier's narration into cinematic, escalating-dread "
         f"narration.\n\n"
+        f"{_learned_section(style_block)}"
         f"TIER: {label} -- {entry_title}\n{depth}\n\n"
         f"Requirements: vary the pacing (mix short, punchy dread-beats with longer "
         f"descriptive lines -- no monotone paragraphs); address the viewer "
@@ -426,10 +438,11 @@ def build_tier_rewrite_prompt(topic, label, entry_title, position, total, factua
     )
 
 
-def build_payoff_rewrite_prompt(topic, factual_payoff, deepest_title, prompt_cfg) -> str:
+def build_payoff_rewrite_prompt(topic, factual_payoff, deepest_title, prompt_cfg, style_block="") -> str:
     return (
         f"You are an ominous documentary narrator closing the '{topic}' iceberg "
         f"deep-dive at its deepest layer ('{deepest_title}').\n\n"
+        f"{_learned_section(style_block)}"
         f"Rewrite the FINAL PAYOFF below into 2-4 spoken sentences that resolve the "
         f"descent and land the dread -- the moment the title is paid off. Speak to "
         f"the viewer. No 'thanks for watching', no 'subscribe'.\n\n"
@@ -450,14 +463,26 @@ def _rewrite(llm, prompt, fallback) -> str:
     return out or fallback
 
 
-def narrative_rewrite(script: dict, llm, prompt_cfg: dict) -> dict:
+def narrative_rewrite(script: dict, llm, prompt_cfg: dict, style_spec: Optional[dict] = None) -> dict:
     """Re-voices a factual script (Pass 1) into cinematic narration (Pass 2).
 
-    Mutates and returns ``script``: cold_hook, every tier narration, and
-    final_payoff are rewritten; the originals are kept under
-    ``factual_cold_hook`` / tier ``factual_narration`` / ``factual_payoff`` for
-    traceability. Non-blocking -- any section that fails keeps its factual text.
+    When a ``style_spec`` is given (distilled from real top-performing videos via
+    style_spec.py), its learned hook formula / pacing / transitions / escalation
+    are injected as guidance instead of only the generic built-in instructions --
+    adopting the genre's proven pattern. Mutates and returns ``script``:
+    cold_hook, every tier narration, and final_payoff are rewritten; the
+    originals are kept under ``factual_*`` for traceability. Non-blocking -- any
+    section that fails keeps its factual text.
     """
+    style_block = ""
+    if style_spec:
+        try:
+            from . import style_spec as style_spec_module
+
+            style_block = style_spec_module.format_spec_for_prompt(style_spec)
+        except Exception:
+            style_block = ""
+
     topic = script.get("iceberg_topic", "the topic")
     tiers = script.get("tiers", [])
     total = len(tiers)
@@ -467,7 +492,7 @@ def narrative_rewrite(script: dict, llm, prompt_cfg: dict) -> dict:
     factual_cold = script.get("cold_hook", "")
     script["factual_cold_hook"] = factual_cold
     script["cold_hook"] = _rewrite(
-        llm, build_cold_open_rewrite_prompt(topic, factual_cold, first_title, prompt_cfg), factual_cold
+        llm, build_cold_open_rewrite_prompt(topic, factual_cold, first_title, prompt_cfg, style_block), factual_cold
     )
 
     for position, tier in enumerate(tiers, start=1):
@@ -477,7 +502,7 @@ def narrative_rewrite(script: dict, llm, prompt_cfg: dict) -> dict:
             llm,
             build_tier_rewrite_prompt(
                 topic, tier.get("label", ""), tier.get("entry_title", ""),
-                position, total, factual, tier.get("open_loop", ""), prompt_cfg,
+                position, total, factual, tier.get("open_loop", ""), prompt_cfg, style_block,
             ),
             factual,
         )
@@ -485,7 +510,7 @@ def narrative_rewrite(script: dict, llm, prompt_cfg: dict) -> dict:
     factual_payoff = script.get("final_payoff", "")
     script["factual_payoff"] = factual_payoff
     script["final_payoff"] = _rewrite(
-        llm, build_payoff_rewrite_prompt(topic, factual_payoff, deepest_title, prompt_cfg), factual_payoff
+        llm, build_payoff_rewrite_prompt(topic, factual_payoff, deepest_title, prompt_cfg, style_block), factual_payoff
     )
 
     script["word_count"] = _word_count(
@@ -594,6 +619,8 @@ def generate_script(
     grounding: Optional[bool] = None,
     searcher: Optional[Callable] = None,
     narrative: Optional[bool] = None,
+    style_spec: Optional[dict] = None,
+    niche: str = "iceberg_deepdive",
     log: bool = True,
 ) -> dict:
     """
@@ -718,11 +745,24 @@ def generate_script(
         except Exception:
             narrative = True
     if narrative:
+        # Use the learned per-niche style spec when one is available. Only the
+        # CACHED spec is loaded here (no live harvest during script gen); build
+        # it separately via style_spec.build_style_spec / the CLI.
+        if style_spec is None:
+            try:
+                from . import style_spec as style_spec_module
+
+                style_spec = style_spec_module.load_cached(niche)
+            except Exception:
+                style_spec = None
         try:
-            narrative_rewrite(script, llm, prompt_cfg)
+            narrative_rewrite(script, llm, prompt_cfg, style_spec=style_spec)
         except Exception:
             # Non-blocking: if Pass 2 wholesale fails, keep the factual script.
             script["narrative_pass"] = False
+        script["style_spec_used"] = bool(style_spec and not style_spec.get("low_confidence"))
+        if style_spec and style_spec.get("chapter_style"):
+            script["chapter_style"] = style_spec["chapter_style"]
     word_count = script["word_count"]
 
     if log:

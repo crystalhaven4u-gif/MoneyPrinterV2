@@ -151,11 +151,21 @@ def _bare_topic(topic: str) -> str:
     return re.sub(r"^(the|a|an)\s+", "", (topic or "").strip(), flags=re.IGNORECASE)
 
 
-def _hooks_prompt(topic: str, n: int) -> str:
+def _hook_formula_block(style_spec) -> str:
+    """A learned hook-formula line for the prompt, or '' when no spec is given."""
+    if not style_spec:
+        return ""
+    formula = (style_spec.get("hook_formula") or "").strip()
+    return (f"LEARNED HOOK FORMULA (from real top-performing videos -- adopt the "
+            f"MOVE, never copy wording): {formula}\n\n") if formula else ""
+
+
+def _hooks_prompt(topic: str, n: int, style_spec=None) -> str:
     topic = _bare_topic(topic)
     return (
         f"You write cold opens for long-form 'iceberg' YouTube deep-dives.\n"
         f"Topic: the {topic} iceberg.\n\n"
+        f"{_hook_formula_block(style_spec)}"
         f"Write {n} DISTINCT cold-open hooks (1-2 sentences each, spoken aloud "
         f"in the first 15 seconds). Each must name the iceberg, hint at how deep "
         f"it goes, and promise a payoff at the bottom -- without revealing it.\n\n"
@@ -187,10 +197,13 @@ def run_hook_engine(
     n: int = 8,
     db_path: Optional[str] = None,
     run_id: Optional[str] = None,
+    style_spec: Optional[dict] = None,
     log: bool = True,
 ) -> dict:
     """
     Generates, self-scores, and ranks cold-open hooks for ``topic``.
+
+    When a ``style_spec`` is given, its learned hook formula guides generation.
 
     Returns:
         result (dict): best (the chosen variant) and variants (all, scored,
@@ -202,7 +215,7 @@ def run_hook_engine(
         llm = default_llm()
 
     n = max(MIN_HOOKS, min(MAX_HOOKS, n))
-    hooks = parse_hook_list(llm(_hooks_prompt(topic, n)))
+    hooks = parse_hook_list(llm(_hooks_prompt(topic, n, style_spec=style_spec)))
 
     scored = []
     for hook in hooks:

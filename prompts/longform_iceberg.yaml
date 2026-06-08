@@ -14,7 +14,16 @@
 # inventing any new specifics. Shots now carry a dedicated visual SEARCH QUERY
 # and a mood, separate from the narration. The narrative-rewrite + shot-query
 # prompts live in src/longform/script.py; the `narrative` block below tunes them.
-version: iceberg-v3
+#
+# v4: STYLE-SPEC-DRIVEN. Pass 2 (and hooks + titles) now consume a per-niche
+# STYLE SPEC distilled from REAL top-performing videos (src/longform/exemplars.py
+# harvests them from farm.db; src/longform/style_spec.py distills the abstract
+# pattern -- hook formula, pacing, tier transitions, escalation, title patterns).
+# The learned pattern is injected as guidance; the `narrative` block below is the
+# built-in fallback when no spec is cached. Facts still come ONLY from our own
+# Wikipedia grounding; exemplar wording/facts are never reproduced (legal guard
+# in style_spec.find_leak + sanitize_spec).
+version: iceberg-v4
 
 # Narration pace used to convert production.target_minutes -> a word budget.
 target_wpm: 140
