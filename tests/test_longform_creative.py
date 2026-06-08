@@ -154,7 +154,7 @@ class LengthEnforcementTests(unittest.TestCase):
                 run_id="run-staged", grounding=False,
             )
             self.assertEqual(result["entry_count"], 2)
-            self.assertEqual(result["prompt_version"], "iceberg-v4")
+            self.assertEqual(result["prompt_version"], "iceberg-v5")
             self.assertEqual(len(result["per_entry_word_counts"]), 2)
             self.assertGreater(result["word_count"], 300)
             runs = storage.get_creative_runs(db_path=db)
@@ -211,8 +211,9 @@ class TwoPassNarrativeTests(unittest.TestCase):
             if "SOURCE COLD OPEN" in prompt:
                 return json.dumps({"narration": "Imagine standing beneath stone older than your nation."})
             if "SOURCE NARRATION" in prompt:
-                # Re-voiced but PRESERVES the 312 BC fact carried in the source.
-                return json.dumps({"narration": "You think you know Rome. The aqueducts were built in 312 BC, and what they hid runs deeper."})
+                # Re-voiced (direct address) but PRESERVES the 312 BC fact and
+                # introduces NO new entity beyond Pass 1 (so the lock is a no-op).
+                return json.dumps({"narration": "You think you know the aqueducts. They were built in 312 BC, and what they hid runs deeper."})
             if "SOURCE FINAL PAYOFF" in prompt:
                 return json.dumps({"narration": "This is the bottom. And you can never unsee it."})
             return self.ENTRY
