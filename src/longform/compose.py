@@ -349,6 +349,21 @@ def _estimate_duration(text: str, wpm: int = 155) -> float:
     return max(2.0, words / max(1, wpm) * 60.0)
 
 
+def _atmosphere_shot(query: str, mood: str = "") -> dict:
+    """An atmosphere shot spec (AI imagery preferred, stock as fallback)."""
+    return {"description": query, "query": query, "mood": mood, "type": "atmosphere"}
+
+
+def _tier_shots(tier: dict, topic: str) -> list:
+    """Rich shot specs for a tier: prefer the v3 ``shots`` (with queries/types);
+    fall back to ``shot_list`` strings; last resort the entry title."""
+    shots = tier.get("shots")
+    if shots:
+        return shots
+    descriptions = tier.get("shot_list") or [tier.get("entry_title", "") or topic]
+    return [{"description": d, "query": d, "mood": "", "type": "concrete"} for d in descriptions]
+
+
 def produce(
     script: dict,
     run_id: str,
@@ -378,15 +393,24 @@ def produce(
     os.makedirs(work_dir, exist_ok=True)
     os.makedirs(out_dir, exist_ok=True)
 
-    # Build the narrated sections from the script.
-    sections = [("Introduction", script.get("cold_hook", ""),
-                 [f"{script.get('iceberg_topic', 'the topic')} ominous intro"])]
+    # Build the narrated sections from the script. Each section carries rich
+    # shot specs {description, query, mood, type} so the sourcer can emit
+    # dedicated visual search queries and pick AI vs stock per shot.
+    topic = script.get("iceberg_topic", "the topic")
+    sections = [(
+        "Introduction", script.get("cold_hook", ""),
+        [_atmosphere_shot(f"{topic} ominous title reveal in fog", "dread"),
+         _atmosphere_shot(f"{topic} eerie establishing atmosphere", "unease")],
+    )]
     for tier in script.get("tiers", []):
-        shots = tier.get("shot_list") or [tier.get("entry_title", "")]
-        sections.append((f"{tier.get('label', '')}: {tier.get('entry_title', '')}".strip(": "),
-                         tier.get("narration", ""), shots))
-    sections.append(("Conclusion", script.get("final_payoff", ""),
-                     [f"{script.get('iceberg_topic', 'the topic')} dark finale"]))
+        title = f"{tier.get('label', '')}: {tier.get('entry_title', '')}".strip(": ")
+        shots = _tier_shots(tier, topic)
+        sections.append((title, tier.get("narration", ""), shots))
+    sections.append((
+        "Conclusion", script.get("final_payoff", ""),
+        [_atmosphere_shot(f"{topic} descent into pitch-black abyss", "dread"),
+         _atmosphere_shot(f"{topic} ominous dark finale", "finality")],
+    ))
 
     section_videos, chapter_specs = [], []
     counts = {"real_clips": 0, "ai_fallbacks": 0, "slates": 0, "failed_shots": 0}
@@ -410,12 +434,12 @@ def produce(
             duration = _estimate_duration(narration)
 
         # Shots -> clips
-        shots = shots or [title]
+        shots = shots or [_atmosphere_shot(title)]
         per_shot = max(1.2, duration / len(shots))
         clips, clip_durs = [], []
-        for shot_text in shots:
+        for shot_spec in shots:
             try:
-                asset = source_shot_fn(shot_text, shot_counter, title, sec_dir)
+                asset = source_shot_fn(shot_spec, shot_counter, title, sec_dir)
             except Exception:
                 asset = None
             shot_counter += 1

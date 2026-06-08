@@ -14,7 +14,9 @@ clip/image from repeating within one video.
 """
 
 import hashlib
+import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -32,6 +34,17 @@ _PHASH_THRESHOLD = 6  # max Hamming distance to treat two assets as duplicates
 
 def _http(session):
     return session if session is not None else requests
+
+
+def _slug_words(url: str) -> str:
+    """Pulls human-readable words out of a stock URL slug (e.g. a Pexels page)."""
+    try:
+        path = re.sub(r"https?://[^/]+/", "", url or "")
+        path = re.sub(r"[-/_]+", " ", path)
+        path = re.sub(r"\b\d+\b", " ", path)  # drop the numeric id
+        return " ".join(path.split()).strip()
+    except Exception:
+        return ""
 
 
 def is_commercial_safe(license_str: str) -> bool:
@@ -76,6 +89,7 @@ def query_pexels(shot: str, cfg: dict, session=None) -> list:
                 "url": video.get("url", ""), "download_url": hd.get("link", ""),
                 "license": "Pexels License", "attribution_required": False,
                 "kind": "video", "author": (video.get("user") or {}).get("name", ""),
+                "description": _slug_words(video.get("url", "")),
             })
         return out
     except Exception:
@@ -104,6 +118,7 @@ def query_pixabay(shot: str, cfg: dict, session=None) -> list:
                 "url": hit.get("pageURL", ""), "download_url": best["url"],
                 "license": "Pixabay License", "attribution_required": False,
                 "kind": "video", "author": hit.get("user", ""),
+                "description": str(hit.get("tags", "")),
             })
         return out
     except Exception:
@@ -132,6 +147,7 @@ def query_openverse(shot: str, cfg: dict, session=None) -> list:
                 "license": item.get("license", ""),
                 "attribution_required": "by" in (item.get("license", "") or "").lower(),
                 "kind": "image", "author": item.get("creator", ""),
+                "description": str(item.get("title", "")),
             })
         return out
     except Exception:
@@ -139,6 +155,78 @@ def query_openverse(shot: str, cfg: dict, session=None) -> list:
 
 
 DEFAULT_PROVIDERS = (query_pexels, query_pixabay, query_openverse)
+
+
+# --------------------------------------------------------------------------- #
+# Relevance ranking -- fetch many candidates, keep the best visual match
+# --------------------------------------------------------------------------- #
+# A candidate scoring below this (0-10) is treated as a generic mismatch: the
+# stock strategy declines it so the shot falls through to AI imagery instead.
+MIN_RELEVANCE = 4.0
+
+
+def make_relevance_ranker(llm: Callable[[str], str]) -> Callable:
+    """Builds an LLM relevance ranker: ``ranker(intent, descriptions) -> [score]``.
+
+    ``intent`` is the shot's visual intent (query/description/mood); each score
+    is 0-10 for how well that candidate visually matches the intent. Fully
+    non-blocking -- any failure returns an empty list so callers keep the
+    providers' own order (and the first candidate wins as before).
+    """
+    if llm is None:
+        return lambda intent, descriptions: []
+
+    def ranker(intent: str, descriptions: list) -> list:
+        listing = "\n".join(
+            f"{index}. {desc or '(no description)'}" for index, desc in enumerate(descriptions)
+        )
+        prompt = (
+            f"A video editor needs ONE clip/image for this shot:\n  INTENT: {intent}\n\n"
+            f"Score how well each candidate below VISUALLY matches that intent, "
+            f"0-10 (10 = perfect on-theme match; 0 = unrelated/generic). Judge the "
+            f"described content only.\n\nCANDIDATES:\n{listing}\n\n"
+            f'Return ONLY a JSON array, one object per candidate, in order: '
+            f'[{{"index": <int>, "score": <0-10>}}]'
+        )
+        try:
+            text = llm(prompt)
+            fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+            if fence:
+                text = fence.group(1)
+            start, end = text.find("["), text.rfind("]")
+            verdicts = json.loads(text[start:end + 1], strict=False)
+        except Exception:
+            return []
+        scores = [0.0] * len(descriptions)
+        for verdict in verdicts:
+            try:
+                index = int(verdict["index"])
+                if 0 <= index < len(scores):
+                    scores[index] = max(0.0, min(10.0, float(verdict.get("score", 0))))
+            except (TypeError, ValueError, KeyError):
+                continue
+        return scores
+
+    return ranker
+
+
+def rank_candidates(intent: str, candidates: list, ranker: Optional[Callable]) -> tuple:
+    """Orders ``candidates`` best-first by relevance to ``intent``.
+
+    Returns (ordered_candidates, best_score). With no ranker (or on any failure)
+    the original order is kept and best_score is None (meaning "unscored -- don't
+    reject"). With a ranker, candidates sort by score descending and best_score
+    is the top score so the caller can reject a generic-only match set.
+    """
+    if not candidates or ranker is None:
+        return candidates, None
+    descriptions = [c.get("description", "") for c in candidates]
+    scores = ranker(intent, descriptions) or []
+    if len(scores) != len(candidates):
+        return candidates, None
+    ordered = sorted(zip(candidates, scores), key=lambda pair: pair[1], reverse=True)
+    best_score = ordered[0][1] if ordered else None
+    return [c for c, _ in ordered], best_score
 
 
 # --------------------------------------------------------------------------- #
@@ -236,6 +324,83 @@ def _attribution(candidate: dict) -> str:
     return f"{author} via {candidate['source']} ({candidate.get('license', '')})".strip()
 
 
+def _source_stock(
+    search_query, intent, shot_index, dest_dir, providers, footage_cfg,
+    used_hashes, session, ffmpeg_path, ranker, reject_generic=True,
+) -> Optional[dict]:
+    """Best commercial-safe stock match for a shot, or None.
+
+    Gathers candidates across ALL providers, relevance-ranks them against the
+    shot intent, and downloads best-first until one passes the perceptual-dedupe
+    gate. When ``reject_generic`` is set and the best match only scores generic
+    (< MIN_RELEVANCE), returns None so the shot can fall through to AI imagery --
+    but the caller retries with ``reject_generic=False`` once AI is exhausted, so
+    a real (if imperfect) clip always beats a colored slate.
+    """
+    candidates = []
+    for provider in providers:
+        try:
+            found = provider(search_query, footage_cfg, session) or []
+        except Exception:
+            found = []
+        candidates.extend(c for c in found if is_commercial_safe(c.get("license", "")))
+    if not candidates:
+        return None
+
+    ordered, best_score = rank_candidates(intent, candidates, ranker)
+    if reject_generic and best_score is not None and best_score < MIN_RELEVANCE:
+        return None  # only generic mismatches -> prefer AI imagery instead
+
+    for index, candidate in enumerate(ordered):
+        ext = ".mp4" if candidate.get("kind") == "video" else ".jpg"
+        dest = os.path.join(dest_dir, f"shot{shot_index}_{candidate['source']}_{index}{ext}")
+        path = download(candidate.get("download_url", ""), dest, session=session)
+        if not path:
+            continue
+        digest = perceptual_hash(path, candidate.get("kind", "image"), ffmpeg_path)
+        if is_duplicate(digest, used_hashes):
+            continue
+        if digest is not None:
+            used_hashes.add(digest)
+        return {
+            "kind": candidate.get("kind", "image"), "path": path,
+            "source": candidate["source"], "source_id": candidate.get("source_id", ""),
+            "url": candidate.get("url", ""), "license": candidate.get("license", ""),
+            "attribution_required": bool(candidate.get("attribution_required")),
+            "attribution": _attribution(candidate),
+        }
+    return None
+
+
+def _source_ai(ai_prompt, shot_index, dest_dir, image_fallback_fn, used_hashes, ffmpeg_path) -> Optional[dict]:
+    """AI image for a shot, or None. A flagged placeholder is treated as a
+    FAILURE (returns None) so the shot falls through to stock/slate rather than
+    silently shipping a gray placeholder as if it were real footage."""
+    if image_fallback_fn is None:
+        return None
+    try:
+        dest = os.path.join(dest_dir, f"shot{shot_index}_ai.png")
+        result = image_fallback_fn(ai_prompt, dest)
+        ai_path = getattr(result, "path", None) or (result.get("path") if isinstance(result, dict) else None)
+        is_placeholder = getattr(result, "is_placeholder", None)
+        if isinstance(result, dict):
+            is_placeholder = result.get("is_placeholder")
+        if is_placeholder:
+            return None
+        if not (ai_path and os.path.exists(ai_path)):
+            return None
+        digest = perceptual_hash(ai_path, "image", ffmpeg_path)
+        if digest is not None:
+            used_hashes.add(digest)
+        return {
+            "kind": "image", "path": ai_path, "source": "ai_generated",
+            "source_id": "", "url": "", "license": "AI-generated (owned)",
+            "attribution_required": False, "attribution": "",
+        }
+    except Exception:
+        return None
+
+
 def source_shot(
     shot_text: str,
     shot_index: int,
@@ -250,9 +415,25 @@ def source_shot(
     ffmpeg_path: str = "ffmpeg",
     db_path: Optional[str] = None,
     log: bool = True,
+    search_query: Optional[str] = None,
+    ai_prompt: Optional[str] = None,
+    prefer_ai: bool = False,
+    ranker: Optional[Callable] = None,
 ) -> dict:
     """
-    Sources a single shot: real clip -> AI image -> slate, always license-logged.
+    Sources a single shot with an ordered fallback chain, always license-logged.
+
+    For atmospheric/lore shots set ``prefer_ai=True`` so AI imagery is tried
+    FIRST (eerie, on-theme), with stock as the fallback; for concrete real-world
+    shots stock is tried first. Either way a flagged AI placeholder falls through
+    rather than shipping, and a colored slate is the final guaranteed fallback.
+
+    Args:
+        search_query: the stock/AI library query (concrete nouns + mood);
+            defaults to ``shot_text``.
+        ai_prompt: the AI-image prompt; defaults to ``shot_text``.
+        prefer_ai: try AI imagery before stock (atmosphere shots).
+        ranker: optional relevance ranker (see ``make_relevance_ranker``).
 
     Returns the asset dict {kind, path, source, source_id, url, license,
     attribution_required, attribution, shot_text, entry_title, shot_index}.
@@ -260,61 +441,32 @@ def source_shot(
     used_hashes = used_hashes if used_hashes is not None else set()
     footage_cfg = footage_cfg or {}
     os.makedirs(dest_dir, exist_ok=True)
+    search_query = (search_query or shot_text or "").strip()
+    ai_prompt = (ai_prompt or shot_text or "").strip()
+    intent = ai_prompt or search_query or (shot_text or "")
 
-    # 1) Try each provider's commercial-safe candidates.
-    for provider in providers:
-        try:
-            candidates = provider(shot_text, footage_cfg, session) or []
-        except Exception:
-            candidates = []
-        for index, candidate in enumerate(candidates):
-            if not is_commercial_safe(candidate.get("license", "")):
-                continue
-            ext = ".mp4" if candidate.get("kind") == "video" else ".jpg"
-            dest = os.path.join(dest_dir, f"shot{shot_index}_{candidate['source']}_{index}{ext}")
-            path = download(candidate.get("download_url", ""), dest, session=session)
-            if not path:
-                continue
-            digest = perceptual_hash(path, candidate.get("kind", "image"), ffmpeg_path)
-            if is_duplicate(digest, used_hashes):
-                continue
-            if digest is not None:
-                used_hashes.add(digest)
-            asset = {
-                "kind": candidate.get("kind", "image"), "path": path,
-                "source": candidate["source"], "source_id": candidate.get("source_id", ""),
-                "url": candidate.get("url", ""), "license": candidate.get("license", ""),
-                "attribution_required": bool(candidate.get("attribution_required")),
-                "attribution": _attribution(candidate),
-            }
+    def _stock(reject_generic=True):
+        return _source_stock(
+            search_query, intent, shot_index, dest_dir, providers, footage_cfg,
+            used_hashes, session, ffmpeg_path, ranker, reject_generic=reject_generic,
+        )
+
+    def _ai():
+        return _source_ai(ai_prompt, shot_index, dest_dir, image_fallback_fn, used_hashes, ffmpeg_path)
+
+    # Atmosphere shots prefer AI first; concrete shots prefer (relevant) stock,
+    # then AI. In BOTH chains the final step is lenient stock (reject_generic
+    # off) so a real, if imperfect, clip always wins over a colored slate.
+    if prefer_ai:
+        order = [_ai, lambda: _stock(reject_generic=False)]
+    else:
+        order = [lambda: _stock(reject_generic=True), _ai, lambda: _stock(reject_generic=False)]
+    for strategy in order:
+        asset = strategy()
+        if asset is not None:
             return _finalize(asset, shot_text, shot_index, entry_title, run_id, db_path, log)
 
-    # 2) AI image fallback (owned license).
-    if image_fallback_fn is not None:
-        try:
-            dest = os.path.join(dest_dir, f"shot{shot_index}_ai.png")
-            result = image_fallback_fn(shot_text, dest)
-            ai_path = getattr(result, "path", None) or (result.get("path") if isinstance(result, dict) else None)
-            is_placeholder = getattr(result, "is_placeholder", None)
-            if isinstance(result, dict):
-                is_placeholder = result.get("is_placeholder")
-            if ai_path and os.path.exists(ai_path):
-                digest = perceptual_hash(ai_path, "image", ffmpeg_path)
-                if digest is not None:
-                    used_hashes.add(digest)
-                asset = {
-                    "kind": "image", "path": ai_path,
-                    "source": "slate" if is_placeholder else "ai_generated",
-                    "source_id": "", "url": "",
-                    "license": "Generated placeholder (owned)" if is_placeholder
-                    else "AI-generated (owned)",
-                    "attribution_required": False, "attribution": "",
-                }
-                return _finalize(asset, shot_text, shot_index, entry_title, run_id, db_path, log)
-        except Exception:
-            pass
-
-    # 3) Colored slate (last resort) -- still licensed + logged.
+    # Colored slate (last resort) -- still licensed + logged.
     slate = make_slate(os.path.join(dest_dir, f"shot{shot_index}_slate.png"))
     asset = {
         "kind": "slate", "path": slate, "source": "slate", "source_id": "",

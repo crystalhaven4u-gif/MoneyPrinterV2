@@ -27,7 +27,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 import requests
 
-from longform import compose, image_providers, music, sourcer, storage, tts
+from longform import compose, image_providers, llm as llm_module, music, sourcer, storage, tts
 
 
 def main(argv=None) -> int:
@@ -63,6 +63,11 @@ def main(argv=None) -> int:
 
     session = requests.Session()
     used_hashes = set()
+    topic = (script.get("iceberg_topic") if isinstance(script, dict) else None) or run_id
+
+    # LLM-backed relevance ranker: fetch many candidates per shot and keep the
+    # best visual match (non-blocking -- falls back to provider order on error).
+    ranker = sourcer.make_relevance_ranker(llm_module.default_llm())
 
     def image_fallback_fn(prompt, out_path):
         return image_providers.generate_image(
@@ -70,12 +75,27 @@ def main(argv=None) -> int:
             session=session, db_path=None,
         )
 
-    def source_shot_fn(shot_text, shot_index, section_title, dest_dir):
+    def _ai_prompt(spec):
+        """An eerie, on-theme AI prompt for an atmosphere shot."""
+        bits = [spec.get("description") or spec.get("query") or "", topic]
+        if spec.get("mood"):
+            bits.append(spec["mood"])
+        bits += ["dark", "cinematic", "ominous lighting", "photoreal", "16:9"]
+        return ", ".join(b for b in bits if b)
+
+    def source_shot_fn(shot, shot_index, section_title, dest_dir):
+        spec = shot if isinstance(shot, dict) else {
+            "description": str(shot), "query": str(shot), "mood": "", "type": "concrete"
+        }
+        query = spec.get("query") or spec.get("description") or section_title
+        prefer_ai = spec.get("type") == "atmosphere"
         return sourcer.source_shot(
-            shot_text, shot_index, section_title, run_id, dest_dir,
+            spec.get("description") or query, shot_index, section_title, run_id, dest_dir,
             providers=sourcer.DEFAULT_PROVIDERS, footage_cfg=footage_cfg,
             image_fallback_fn=image_fallback_fn, used_hashes=used_hashes,
             session=session, ffmpeg_path=ffmpeg_path, db_path=None,
+            search_query=query, ai_prompt=_ai_prompt(spec), prefer_ai=prefer_ai,
+            ranker=ranker,
         )
 
     def tts_fn(text, out_path):
