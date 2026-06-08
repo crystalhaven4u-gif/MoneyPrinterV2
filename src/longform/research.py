@@ -63,6 +63,45 @@ def _is_relevant(topic: str, title: str, fact: str) -> bool:
     return any(token in haystack for token in topic_tokens)
 
 
+def fetch_full_extract(title: str, session=None, chars: int = 2000) -> str:
+    """Returns a FULLER plain-text extract for ``title`` (Action API ``extracts``).
+
+    This is richer than the one-line REST summary, so Pass 1 has real source text
+    to ground specific dates/names/numbers against. Non-blocking: returns "" on
+    any error.
+    """
+    try:
+        response = _http(session).get(
+            WIKI_ACTION_API,
+            params={
+                "action": "query", "prop": "extracts", "explaintext": 1,
+                "exchars": chars, "redirects": 1, "titles": title, "format": "json",
+            },
+            headers={"User-Agent": _USER_AGENT},
+            timeout=20,
+        )
+        response.raise_for_status()
+        pages = (response.json().get("query", {}) or {}).get("pages", {}) or {}
+        for page in pages.values():
+            extract = (page.get("extract") or "").strip()
+            if extract:
+                return extract
+    except Exception:
+        pass
+    return ""
+
+
+def enrich_with_source_text(entries, session=None) -> list:
+    """Adds a fuller ``source_text`` to each entry (falls back to its short
+    ``fact``). Non-blocking and polite (small delay between requests)."""
+    for entry in entries or []:
+        title = entry.get("title") or ""
+        full = fetch_full_extract(title, session=session) if title else ""
+        entry["source_text"] = full or entry.get("fact", "")
+        _sleep(_REQUEST_DELAY)
+    return entries
+
+
 def _summary(title: str, session=None) -> dict:
     """Returns {title, fact, url} from the Wikipedia REST summary endpoint."""
     response = _http(session).get(
