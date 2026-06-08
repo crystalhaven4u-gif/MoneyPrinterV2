@@ -6,7 +6,15 @@
 # enforcement) plus optional factual grounding. `instructions`/`output_schema`
 # below describe the single-shot legacy contract and are retained for `style`
 # and `few_shot`; the staged prompts live in src/longform/script.py.
-version: iceberg-v2
+#
+# v3: TWO-PASS generation. Pass 1 is the v2 grounded factual skeleton (accurate,
+# no drama). Pass 2 re-voices every section as an ominous documentary narrator
+# building escalating dread -- visceral cold open, direct address, pacing
+# variation, stakes-driven open loops, no encyclopedic phrasing -- WITHOUT
+# inventing any new specifics. Shots now carry a dedicated visual SEARCH QUERY
+# and a mood, separate from the narration. The narrative-rewrite + shot-query
+# prompts live in src/longform/script.py; the `narrative` block below tunes them.
+version: iceberg-v3
 
 # Narration pace used to convert production.target_minutes -> a word budget.
 target_wpm: 140
@@ -49,6 +57,25 @@ output_schema: |
     ],
     "final_payoff": "<spoken close that resolves the deepest layer>"
   }
+
+# Pass 2 (NARRATIVE REWRITE) tuning. The factual skeleton from Pass 1 is
+# re-voiced section by section into cinematic, escalating-dread narration. The
+# few-shot lines below set the TONE only -- the model must never reuse their
+# wording or their facts, only their cadence and menace.
+narrative:
+  rules:
+    - "Rewrite, never restate: keep every name, date, number and fact from the source EXACTLY; invent NO new specifics."
+    - "Cold open must land a visceral hook in the first 2-3 sentences -- a disturbing question, a stake, an unsettling image. NEVER 'Welcome to the X iceberg'."
+    - "Speak to the viewer: use 'you', 'imagine', 'you've seen this before' to pull them in."
+    - "Escalate: each tier must feel DARKER and more unsettling than the one before -- emotion and dread, not just rarer trivia."
+    - "Vary the pacing: mix short, punchy dread-beats with longer descriptive lines. No monotone paragraphs."
+    - "End each tier on an open loop with STAKES ('but what they found next should not have existed'), never 'next, we'll look at...'."
+    - "Strip encyclopedic phrasing ('is a fictional', 'refers to', 'is a concept'), hedging, and filler. Documentary narrator, not Wikipedia."
+  # Tone exemplars (cadence + menace only -- do NOT copy wording or topics).
+  few_shot:
+    - "You were never supposed to find this. Most people scroll past it and feel nothing. But once you see what's underneath, you can't unsee it -- and it goes so much deeper than they let on."
+    - "It starts with something harmless. A blurry photo. A rumor. The kind of thing you'd laugh off. Then the dates stop lining up, the witnesses stop talking, and the laughter dies in your throat."
+    - "Stay with me, because this is where it stops being a story. The deeper we go, the less of it anyone can explain -- and the last layer is the one they hoped you'd never reach."
 
 # Style guidance, refreshed at runtime with REAL top performers from farm.db
 # (their titles + durations) so the model imitates proven winners, not priors.

@@ -108,6 +108,51 @@ def _coerce_shot_list(value) -> list:
     return [str(shot).strip() for shot in (value or []) if str(shot).strip()]
 
 
+# Visual shot specs (v3): each shot carries a description (what it shows), a
+# dedicated stock/AI SEARCH QUERY (concrete filmable nouns + mood, separate from
+# narration), a mood word, and a type: "atmosphere" (eerie/lore -> prefer AI
+# imagery) or "concrete" (a real-world thing -> prefer stock footage).
+_VALID_SHOT_TYPES = ("atmosphere", "concrete")
+
+
+def _coerce_shots(value) -> list:
+    """Normalizes a model shot_list into rich shot specs.
+
+    Accepts a list of strings (legacy) or a list of objects with any of
+    {description, query, search_query, mood, type}. Always returns a list of
+    {description, query, mood, type} dicts; strings become concrete shots whose
+    query equals the description.
+    """
+    if isinstance(value, (str, dict)):
+        value = [value]
+    shots = []
+    for raw in value or []:
+        if isinstance(raw, str):
+            text = raw.strip()
+            if not text:
+                continue
+            shots.append({"description": text, "query": text, "mood": "", "type": "concrete"})
+            continue
+        if not isinstance(raw, dict):
+            continue
+        description = str(raw.get("description") or raw.get("shot") or "").strip()
+        query = str(raw.get("query") or raw.get("search_query") or description).strip()
+        if not (description or query):
+            continue
+        description = description or query
+        query = query or description
+        shot_type = str(raw.get("type") or "").strip().lower()
+        if shot_type not in _VALID_SHOT_TYPES:
+            shot_type = "concrete"
+        shots.append({
+            "description": description,
+            "query": query,
+            "mood": str(raw.get("mood") or "").strip(),
+            "type": shot_type,
+        })
+    return shots
+
+
 def parse_outline(text: str) -> dict:
     """
     Parses an OUTLINE reply into {cold_hook, final_payoff, tiers:[{tier, label,
@@ -147,7 +192,7 @@ def parse_outline(text: str) -> dict:
 
 
 def parse_entry(text: str) -> dict:
-    """Parses a PER-ENTRY reply into {narration, shot_list, open_loop}."""
+    """Parses a PER-ENTRY reply into {narration, shots, shot_list, open_loop}."""
     data = json.loads(_extract_json(text), strict=False)
     if not isinstance(data, dict):
         raise ValueError("entry JSON is not an object")
@@ -157,11 +202,40 @@ def parse_entry(text: str) -> dict:
     open_loop = str(data.get("open_loop", "")).strip()
     if open_loop.lower() == "open_loop":  # model echoed the schema key, not a value
         open_loop = ""
+    shots = _coerce_shots(data.get("shot_list"))
     return {
         "narration": narration,
-        "shot_list": _coerce_shot_list(data.get("shot_list")),
+        "shots": shots,
+        "shot_list": [shot["description"] for shot in shots],
         "open_loop": open_loop,
     }
+
+
+def parse_rewrite(text: str) -> str:
+    """Parses a NARRATIVE-REWRITE reply into the rewritten narration string.
+
+    Accepts a JSON object with a ``narration`` key, or (fallback) treats the
+    whole reply as prose after stripping any code fence/preamble. Raises
+    ValueError only when nothing usable remains.
+    """
+    if not text or not text.strip():
+        raise ValueError("empty rewrite output")
+    try:
+        data = json.loads(_extract_json(text), strict=False)
+        if isinstance(data, dict):
+            narration = str(data.get("narration", "")).strip()
+            if narration:
+                return narration
+    except ValueError:
+        pass
+    # Fallback: strip a leading ```fence and any "Here is..." preamble line.
+    cleaned = text.strip()
+    fence = re.search(r"```(?:\w+)?\s*(.*?)```", cleaned, re.DOTALL)
+    if fence:
+        cleaned = fence.group(1).strip()
+    if not cleaned:
+        raise ValueError("no rewrite text found")
+    return cleaned
 
 
 # Legacy single-shot parser, retained for compatibility/tests.
@@ -245,9 +319,17 @@ def build_entry_prompt(topic, tier, word_budget, running_context, fact, prompt_c
         f"(calm authoritative voice, short sentences, escalating unease). End on a "
         f"one-sentence open_loop teasing the next deeper tier"
         + (f" (planned: {tier['open_loop']})" if tier.get("open_loop") else "")
-        + ". Give a shot_list of 2-4 concrete visuals.\n\n"
-        f"Return ONLY JSON: {{\"narration\": str, \"shot_list\": [str], "
-        f"\"open_loop\": str}}"
+        + ".\n\n"
+        f"Then give a shot_list of 2-4 visuals. For EACH shot provide:\n"
+        f"  - description: what is on screen\n"
+        f"  - query: a concrete VISUAL SEARCH QUERY of filmable nouns + mood for a "
+        f"stock/AI library (NOT a sentence from the narration); e.g. 'ominous red "
+        f"door dark liminal hallway', 'flickering fluorescent office at night'\n"
+        f"  - mood: one or two mood words (e.g. 'dread', 'eerie calm')\n"
+        f"  - type: 'atmosphere' for eerie/lore/abstract shots that suit AI imagery, "
+        f"or 'concrete' for real-world things that suit stock footage\n\n"
+        f"Return ONLY JSON: {{\"narration\": str, \"shot_list\": [{{\"description\": "
+        f"str, \"query\": str, \"mood\": str, \"type\": str}}], \"open_loop\": str}}"
     )
 
 
@@ -265,6 +347,152 @@ def build_expand_prompt(topic, tier, narration, deficit_words, fact) -> str:
         f"Return ONLY JSON (the FULL expanded version): {{\"narration\": str, "
         f"\"shot_list\": [str], \"open_loop\": str}}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Pass 2 -- narrative rewrite (cinematic, escalating dread; facts preserved)
+# --------------------------------------------------------------------------- #
+def _narrative_cfg(prompt_cfg: dict) -> dict:
+    cfg = (prompt_cfg or {}).get("narrative") or {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _narrative_rules(prompt_cfg: dict) -> str:
+    rules = _narrative_cfg(prompt_cfg).get("rules") or []
+    return "\n".join(f"  - {rule}" for rule in rules) if rules else "  - (use cinematic, escalating dread)"
+
+
+def _narrative_few_shot(prompt_cfg: dict) -> str:
+    examples = _narrative_cfg(prompt_cfg).get("few_shot") or []
+    if not examples:
+        return "(no tone examples)"
+    return "\n".join(f'  - "{ex}"' for ex in examples)
+
+
+_PRESERVE = (
+    "HARD RULE: preserve every proper noun, name, date, number, and concrete "
+    "fact from the SOURCE exactly. Do NOT invent any new specifics, events, or "
+    "details that are not already in the source text. You are re-voicing it, not "
+    "adding to it."
+)
+
+
+def build_cold_open_rewrite_prompt(topic, factual_cold_hook, first_tier_title, prompt_cfg) -> str:
+    return (
+        f"You are an ominous documentary narrator opening a YouTube iceberg "
+        f"deep-dive on '{topic}'.\n\n"
+        f"Rewrite the COLD OPEN below into 3-5 spoken sentences that GRIP a viewer "
+        f"in the first 10 seconds. The first 2-3 sentences must land a visceral "
+        f"hook -- a disturbing question, a stake, or an unsettling image -- so the "
+        f"viewer NEEDS the answer. Speak directly to them ('you', 'imagine'). "
+        f"Tease that we descend tier by tier to something at the very bottom, "
+        f"WITHOUT revealing it. Absolutely never begin with 'Welcome to' or "
+        f"'In this video'.\n\n"
+        f"TONE EXEMPLARS (cadence + menace only -- never reuse their words):\n"
+        f"{_narrative_few_shot(prompt_cfg)}\n\n"
+        f"RULES:\n{_narrative_rules(prompt_cfg)}\n\n"
+        f"{_PRESERVE}\n\n"
+        f"SOURCE COLD OPEN:\n{factual_cold_hook}\n\n"
+        f"Return ONLY JSON: {{\"narration\": str}}"
+    )
+
+
+def build_tier_rewrite_prompt(topic, label, entry_title, position, total, factual, open_loop, prompt_cfg) -> str:
+    depth = (
+        "This is the FIRST tier -- unsettling but still recognizable."
+        if position == 1 else
+        f"This is tier {position} of {total} -- it must feel DARKER and more "
+        f"disturbing than every tier before it."
+    )
+    return (
+        f"You are an ominous documentary narrator descending the '{topic}' "
+        f"iceberg. Rewrite ONE tier's narration into cinematic, escalating-dread "
+        f"narration.\n\n"
+        f"TIER: {label} -- {entry_title}\n{depth}\n\n"
+        f"Requirements: vary the pacing (mix short, punchy dread-beats with longer "
+        f"descriptive lines -- no monotone paragraphs); address the viewer "
+        f"directly where it bites; strip all encyclopedic phrasing ('is a "
+        f"fictional', 'refers to', 'is a concept'), hedging and filler; keep "
+        f"roughly the same length. End on a one-sentence open loop with STAKES "
+        f"that pulls the viewer to the next, deeper tier"
+        + (f" (the next descent: {open_loop})" if open_loop else "")
+        + " -- never 'next, we'll look at...'.\n\n"
+        f"TONE EXEMPLARS (cadence + menace only -- never reuse their words):\n"
+        f"{_narrative_few_shot(prompt_cfg)}\n\n"
+        f"RULES:\n{_narrative_rules(prompt_cfg)}\n\n"
+        f"{_PRESERVE}\n\n"
+        f"SOURCE NARRATION:\n{factual}\n\n"
+        f"Return ONLY JSON: {{\"narration\": str}}"
+    )
+
+
+def build_payoff_rewrite_prompt(topic, factual_payoff, deepest_title, prompt_cfg) -> str:
+    return (
+        f"You are an ominous documentary narrator closing the '{topic}' iceberg "
+        f"deep-dive at its deepest layer ('{deepest_title}').\n\n"
+        f"Rewrite the FINAL PAYOFF below into 2-4 spoken sentences that resolve the "
+        f"descent and land the dread -- the moment the title is paid off. Speak to "
+        f"the viewer. No 'thanks for watching', no 'subscribe'.\n\n"
+        f"RULES:\n{_narrative_rules(prompt_cfg)}\n\n"
+        f"{_PRESERVE}\n\n"
+        f"SOURCE FINAL PAYOFF:\n{factual_payoff}\n\n"
+        f"Return ONLY JSON: {{\"narration\": str}}"
+    )
+
+
+def _rewrite(llm, prompt, fallback) -> str:
+    """Runs one rewrite; returns the rewritten text or the factual fallback on
+    any failure (non-blocking -- Pass 2 must never lose Pass 1's content)."""
+    try:
+        out = parse_rewrite(llm(prompt))
+    except Exception:
+        return fallback
+    return out or fallback
+
+
+def narrative_rewrite(script: dict, llm, prompt_cfg: dict) -> dict:
+    """Re-voices a factual script (Pass 1) into cinematic narration (Pass 2).
+
+    Mutates and returns ``script``: cold_hook, every tier narration, and
+    final_payoff are rewritten; the originals are kept under
+    ``factual_cold_hook`` / tier ``factual_narration`` / ``factual_payoff`` for
+    traceability. Non-blocking -- any section that fails keeps its factual text.
+    """
+    topic = script.get("iceberg_topic", "the topic")
+    tiers = script.get("tiers", [])
+    total = len(tiers)
+    deepest_title = tiers[-1]["entry_title"] if tiers else topic
+    first_title = tiers[0]["entry_title"] if tiers else ""
+
+    factual_cold = script.get("cold_hook", "")
+    script["factual_cold_hook"] = factual_cold
+    script["cold_hook"] = _rewrite(
+        llm, build_cold_open_rewrite_prompt(topic, factual_cold, first_title, prompt_cfg), factual_cold
+    )
+
+    for position, tier in enumerate(tiers, start=1):
+        factual = tier.get("narration", "")
+        tier["factual_narration"] = factual
+        tier["narration"] = _rewrite(
+            llm,
+            build_tier_rewrite_prompt(
+                topic, tier.get("label", ""), tier.get("entry_title", ""),
+                position, total, factual, tier.get("open_loop", ""), prompt_cfg,
+            ),
+            factual,
+        )
+
+    factual_payoff = script.get("final_payoff", "")
+    script["factual_payoff"] = factual_payoff
+    script["final_payoff"] = _rewrite(
+        llm, build_payoff_rewrite_prompt(topic, factual_payoff, deepest_title, prompt_cfg), factual_payoff
+    )
+
+    script["word_count"] = _word_count(
+        script["cold_hook"], script["final_payoff"], *[t["narration"] for t in tiers]
+    )
+    script["narrative_pass"] = True
+    return script
 
 
 # --------------------------------------------------------------------------- #
@@ -334,6 +562,7 @@ def generate_entry(
         # Keep the longer narration; merge in any shots/open_loop it produced.
         if _word_count(expanded["narration"]) > _word_count(entry["narration"]):
             entry["narration"] = expanded["narration"]
+            entry["shots"] = expanded.get("shots") or entry.get("shots", [])
             entry["shot_list"] = expanded["shot_list"] or entry["shot_list"]
             entry["open_loop"] = expanded["open_loop"] or entry["open_loop"]
 
@@ -364,6 +593,7 @@ def generate_script(
     run_id: Optional[str] = None,
     grounding: Optional[bool] = None,
     searcher: Optional[Callable] = None,
+    narrative: Optional[bool] = None,
     log: bool = True,
 ) -> dict:
     """
@@ -432,6 +662,7 @@ def generate_script(
             premise = plan.get("premise") or plan["entry_title"]
             entry = {
                 "narration": premise,
+                "shots": [],
                 "shot_list": [],
                 "open_loop": plan.get("open_loop", ""),
                 "word_count": _word_count(premise),
@@ -443,6 +674,7 @@ def generate_script(
                 "label": plan["label"],
                 "entry_title": plan["entry_title"],
                 "narration": entry["narration"],
+                "shots": entry.get("shots", []),
                 "shot_list": entry["shot_list"],
                 "open_loop": entry["open_loop"] or plan["open_loop"],
             }
@@ -474,7 +706,24 @@ def generate_script(
         "grounded": bool(pool),
         "sources": sources,
         "rejected_sources": rejected_sources,
+        "narrative_pass": False,
     }
+
+    # e) PASS 2 -- narrative rewrite (cinematic, escalating dread; facts kept).
+    if narrative is None:
+        try:
+            from config import get_script_narrative
+
+            narrative = get_script_narrative()
+        except Exception:
+            narrative = True
+    if narrative:
+        try:
+            narrative_rewrite(script, llm, prompt_cfg)
+        except Exception:
+            # Non-blocking: if Pass 2 wholesale fails, keep the factual script.
+            script["narrative_pass"] = False
+    word_count = script["word_count"]
 
     if log:
         storage.log_creative_run(

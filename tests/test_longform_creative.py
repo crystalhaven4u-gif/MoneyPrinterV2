@@ -154,7 +154,7 @@ class LengthEnforcementTests(unittest.TestCase):
                 run_id="run-staged", grounding=False,
             )
             self.assertEqual(result["entry_count"], 2)
-            self.assertEqual(result["prompt_version"], "iceberg-v2")
+            self.assertEqual(result["prompt_version"], "iceberg-v3")
             self.assertEqual(len(result["per_entry_word_counts"]), 2)
             self.assertGreater(result["word_count"], 300)
             runs = storage.get_creative_runs(db_path=db)

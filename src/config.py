@@ -549,6 +549,13 @@ def get_script_grounding() -> bool:
         return value.strip().lower() not in ("0", "false", "no", "off", "")
     return bool(value)
 
+def get_script_narrative() -> bool:
+    """Whether Pass 2 (cinematic narrative rewrite) is enabled (default on)."""
+    value = _get_script_config().get("narrative", True)
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off", "")
+    return bool(value)
+
 def get_script_target_minutes() -> int:
     """Target runtime in minutes for generated long-form scripts."""
     try:
