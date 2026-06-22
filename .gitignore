@@ -3,6 +3,9 @@ config.json
 .mp/
 venv/
 Songs/
+review_queue/
+client_secret.json
+*.client_secret.json
 google-maps-scraper-0.9.7/
 niche.txt
 *.exe

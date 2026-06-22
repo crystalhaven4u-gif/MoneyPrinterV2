@@ -16,7 +16,8 @@ from prettytable import PrettyTable
 from classes.Outreach import Outreach
 from classes.AFM import AffiliateMarketing
 from llm_provider import list_models, select_model, get_active_model
-from post_bridge_integration import maybe_crosspost_youtube_short
+
+import review_queue
 
 def main():
     """Main entry point for the application, providing a menu-driven interface
@@ -162,17 +163,22 @@ def main():
 
                     if user_input == 1:
                         youtube.generate_video(tts)
-                        upload_to_yt = question("Do you want to upload this video to YouTube? (Yes/No): ")
-                        if upload_to_yt.lower() == "yes":
-                            upload_success = youtube.upload_video()
-                            if upload_success:
-                                maybe_crosspost_youtube_short(
-                                    video_path=youtube.video_path,
-                                    title=youtube.metadata.get("title", ""),
-                                    interactive=True,
-                                )
-                            else:
-                                warning("YouTube upload failed. Skipping Post Bridge cross-post.")
+                        # Distribution safety: never publish directly. Every
+                        # finished video lands in the review queue (pending) and
+                        # is published only after a human approves it.
+                        target_platforms = review_queue.default_target_platforms()
+                        metadata = youtube.build_review_metadata(target_platforms)
+                        item = review_queue.submit(
+                            video_path=youtube.video_path,
+                            metadata=metadata,
+                            video_id=youtube.video_id,
+                        )
+                        success(
+                            f"Video submitted to the review queue (pending): "
+                            f"{item['video_id']}"
+                        )
+                        info("Review pending items:  python src/review.py", False)
+                        info("Publish approved items: python src/publish.py", False)
                     elif user_input == 2:
                         videos = youtube.get_videos()
 

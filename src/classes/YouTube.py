@@ -6,6 +6,8 @@ import os
 import requests
 import assemblyai as aai
 
+import ledger
+
 from utils import *
 from cache import *
 from .Tts import TTS
@@ -75,29 +77,34 @@ class YouTube:
         self._language: str = language
 
         self.images = []
+        self.browser = None
 
-        # Initialize the Firefox profile
-        self.options: Options = Options()
+        # The Selenium browser is only needed for the deprecated Selenium upload
+        # path. The default upload path is the YouTube Data API, which needs no
+        # Firefox profile, so we skip launching a browser unless it is requested.
+        if get_use_selenium_upload():
+            # Initialize the Firefox profile
+            self.options: Options = Options()
 
-        # Set headless state of browser
-        if get_headless():
-            self.options.add_argument("--headless")
+            # Set headless state of browser
+            if get_headless():
+                self.options.add_argument("--headless")
 
-        if not os.path.isdir(self._fp_profile_path):
-            raise ValueError(
-                f"Firefox profile path does not exist or is not a directory: {self._fp_profile_path}"
+            if not os.path.isdir(self._fp_profile_path):
+                raise ValueError(
+                    f"Firefox profile path does not exist or is not a directory: {self._fp_profile_path}"
+                )
+
+            self.options.add_argument("-profile")
+            self.options.add_argument(self._fp_profile_path)
+
+            # Set the service
+            self.service: Service = Service(GeckoDriverManager().install())
+
+            # Initialize the browser
+            self.browser: webdriver.Firefox = webdriver.Firefox(
+                service=self.service, options=self.options
             )
-
-        self.options.add_argument("-profile")
-        self.options.add_argument(self._fp_profile_path)
-
-        # Set the service
-        self.service: Service = Service(GeckoDriverManager().install())
-
-        # Initialize the browser
-        self.browser: webdriver.Firefox = webdriver.Firefox(
-            service=self.service, options=self.options
-        )
 
     @property
     def niche(self) -> str:
@@ -217,7 +224,15 @@ class YouTube:
             f"Please generate a YouTube Video Description for the following script: {self.script}. Only return the description, nothing else."
         )
 
-        self.metadata = {"title": title, "description": description}
+        # The title prompt asks for hashtags; pull them out so they can be
+        # carried in the review-queue metadata and reused as tags.
+        hashtags = re.findall(r"#\w+", title)
+
+        self.metadata = {
+            "title": title,
+            "description": description,
+            "hashtags": hashtags,
+        }
 
         return self.metadata
 
@@ -646,18 +661,46 @@ class YouTube:
 
         return combined_image_path
 
-    def generate_video(self, tts_instance: TTS) -> str:
+    def generate_video(
+        self,
+        tts_instance: TTS,
+        lane: str = None,
+        prompt_version: str = "baseline-v0",
+        hook_id: str = None,
+    ) -> str:
         """
         Generates a YouTube Short based on the provided niche and language.
 
+        A ledger row is created up front and updated as each pipeline stage
+        completes, so every generated asset is tracked from the start.
+
         Args:
             tts_instance (TTS): Instance of TTS Class.
+            lane (str): Content lane. Defaults to config's default_lane.
+            prompt_version (str): Version of the prompt pack used.
+            hook_id (str): Id of the hook used (Phase 2). May be None.
 
         Returns:
             path (str): The path to the generated MP4 File.
         """
+        self.lane = lane or get_default_lane()
+        self.prompt_version = prompt_version
+        self.hook_id = hook_id
+
+        # Create the ledger row before any work, so a crash mid-pipeline still
+        # leaves a tracked, pending record.
+        self.video_id = ledger.create_entry(
+            lane=self.lane,
+            prompt_version=prompt_version,
+            hook_id=hook_id,
+            voice=get_tts_voice(),
+            status="pending",
+        )
+        self.utm_campaign = ledger.build_utm_campaign(self.lane, self.video_id)
+
         # Generate the Topic
         self.generate_topic()
+        ledger.update_entry(self.video_id, topic=self.subject)
 
         # Generate the Script
         self.generate_script()
@@ -682,8 +725,41 @@ class YouTube:
             info(f" => Generated Video: {path}")
 
         self.video_path = os.path.abspath(path)
+        ledger.update_entry(self.video_id, video_path=self.video_path)
 
         return path
+
+    def build_review_metadata(self, target_platforms: List[str] = None) -> dict:
+        """
+        Builds the metadata sidecar for the review queue.
+
+        Args:
+            target_platforms (List[str] | None): Platforms this video targets.
+                Defaults to ["youtube"].
+
+        Returns:
+            metadata (dict): Review-queue metadata.
+        """
+        if target_platforms is None:
+            target_platforms = ["youtube"]
+
+        return {
+            "lane": getattr(self, "lane", get_default_lane()),
+            "title": self.metadata.get("title", ""),
+            "description": self.metadata.get("description", ""),
+            "hashtags": self.metadata.get("hashtags", []),
+            "target_platforms": target_platforms,
+            "hook_id": getattr(self, "hook_id", None),
+            "prompt_version": getattr(self, "prompt_version", None),
+            "utm_campaign": getattr(
+                self,
+                "utm_campaign",
+                ledger.build_utm_campaign(
+                    getattr(self, "lane", get_default_lane()),
+                    getattr(self, "video_id", ""),
+                ),
+            ),
+        }
 
     def get_channel_id(self) -> str:
         """
@@ -703,6 +779,63 @@ class YouTube:
     def upload_video(self) -> bool:
         """
         Uploads the video to YouTube.
+
+        Dispatches to the YouTube Data API by default, or to the deprecated
+        Selenium path when ``use_selenium_upload`` is enabled in config.
+
+        Returns:
+            success (bool): Whether the upload was successful or not.
+        """
+        if get_use_selenium_upload():
+            return self.upload_video_selenium()
+        return self.upload_video_api()
+
+    def upload_video_api(self) -> bool:
+        """
+        Uploads the video via the YouTube Data API v3.
+
+        Returns:
+            success (bool): Whether the upload was successful or not.
+        """
+        from youtube_upload import upload_video as api_upload_video
+        from youtube_upload import YouTubeUploadError
+
+        try:
+            uploaded_id = api_upload_video(
+                video_path=self.video_path,
+                title=self.metadata["title"],
+                description=self.metadata["description"],
+                tags=self.metadata.get("hashtags") or None,
+            )
+        except YouTubeUploadError as exc:
+            error(f"YouTube API upload failed: {exc}")
+            return False
+
+        self.uploaded_video_url = build_url(uploaded_id)
+
+        if getattr(self, "video_id", None):
+            try:
+                ledger.mark_published(self.video_id, "youtube", uploaded_id)
+            except KeyError:
+                pass
+
+        if get_verbose():
+            success(f" => Uploaded Video: {self.uploaded_video_url}")
+
+        self.add_video(
+            {
+                "title": self.metadata["title"],
+                "description": self.metadata["description"],
+                "url": self.uploaded_video_url,
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+
+        return True
+
+    def upload_video_selenium(self) -> bool:
+        """
+        Uploads the video to YouTube using the deprecated Selenium path.
 
         Returns:
             success (bool): Whether the upload was successful or not.

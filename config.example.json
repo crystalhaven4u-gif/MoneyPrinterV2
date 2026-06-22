@@ -32,6 +32,16 @@
   "font": "bold_font.ttf",
   "imagemagick_path": "Path to magick.exe or on linux/macOS just /usr/bin/convert",
   "script_sentence_length": 4,
+  "default_lane": "faceless",
+  "use_selenium_upload": false,
+  "youtube": {
+    "client_secrets_file": "client_secret.json",
+    "token_file": ".mp/youtube_token.json",
+    "category_id": "22",
+    "privacy_status": "private",
+    "contains_synthetic_media": true,
+    "default_tags": []
+  },
   "post_bridge": {
     "enabled": false,
     "api_key": "",

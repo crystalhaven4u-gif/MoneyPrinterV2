@@ -30,5 +30,12 @@ else
   exit 1
 fi
 
+# cron.py requires the Ollama model as its third argument; read it from config.
+model=$($PYTHON -c "import json; print(json.load(open('config.json')).get('ollama_model',''))")
+if [ -z "$model" ]; then
+  echo "ollama_model is not set in config.json. Set it before using this script."
+  exit 1
+fi
+
 # Run python script
-$PYTHON src/cron.py youtube $id
+$PYTHON src/cron.py youtube "$id" "$model"
